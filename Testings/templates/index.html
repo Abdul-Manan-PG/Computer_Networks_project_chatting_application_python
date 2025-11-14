@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Server Control</title>
+    <script>
+        // Function to show alert with message from Flask
+        function showAlert(message) {
+            if(message) {
+                alert(message);
+            }
+        }
+    </script>
+</head>
+<body>
+    <h1>Socket Server Control</h1>
+
+    <form action="/start" method="post">
+        <button type="submit">Start Server</button>
+    </form>
+
+    <form action="/stop" method="post">
+        <button type="submit">Stop Server</button>
+    </form>
+
+    <!-- Flask will pass a message to show alert -->
+    <script>
+        showAlert("{{ message }}");
+    </script>
+</body>
+</html>

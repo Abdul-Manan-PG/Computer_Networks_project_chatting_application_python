@@ -1,4 +1,4 @@
-from flask import Flask, render_template_string
+from flask import Flask, render_template, request
 import socket
 import threading
 
@@ -7,31 +7,11 @@ server_running = False
 server_thread = None
 server_socket = None
 
-HTML = """
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Server Control</title>
-</head>
-<body>
-    <h1>Socket Server Control</h1>
-    <form action="/start" method="post">
-        <button type="submit">Start Server</button>
-    </form>
-    <form action="/stop" method="post">
-        <button type="submit">Stop Server</button>
-    </form>
-</body>
-</html>
-"""
-
-# Replace "0.0.0.0" with your local IP if needed
-HOST = "10.75.27.94"  
-PORT = 5001  # TCP port for clients to connect
+HOST = "0.0.0.0"
+PORT = 5001
 
 def run_socket_server():
     global server_socket, server_running
-
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_socket.bind((HOST, PORT))
     server_socket.listen()
@@ -39,7 +19,7 @@ def run_socket_server():
 
     try:
         while server_running:
-            server_socket.settimeout(1)  # avoid blocking forever
+            server_socket.settimeout(1)
             try:
                 conn, addr = server_socket.accept()
                 print(f"[CLIENT CONNECTED] {addr}")
@@ -53,31 +33,39 @@ def run_socket_server():
     print("[SERVER] Stopped")
     server_socket.close()
 
+
 @app.route("/")
 def home():
-    return render_template_string(HTML)
+    return render_template("index.html", message="")
+
 
 @app.post("/start")
 def start_server():
     global server_running, server_thread
-
+    msg = ""
     if not server_running:
         server_running = True
         server_thread = threading.Thread(target=run_socket_server)
         server_thread.start()
         print("[WEB] Server started")
+        msg = "Server Started!"
+    else:
+        msg = "Server is already running!"
+    return render_template("index.html", message=msg)
 
-    return "Server started! <br><a href='/'>Go Back</a>"
 
 @app.post("/stop")
 def stop_server():
     global server_running
-
+    msg = ""
     if server_running:
         server_running = False
         print("[WEB] Server stopped")
+        msg = "Server Stopped!"
+    else:
+        msg = "Server is not running!"
+    return render_template("index.html", message=msg)
 
-    return "Server stopped! <br><a href='/'>Go Back</a>"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8080, debug=True)  # Web panel accessible to LAN
+    app.run(host="0.0.0.0", port=8080, debug=True)
