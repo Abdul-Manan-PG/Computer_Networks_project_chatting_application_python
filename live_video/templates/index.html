@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Client Stream Control</title>
+</head>
+<body style="text-align:center; font-family:Arial;">
+    <h1>Live Video + Audio Stream</h1>
+
+    <button onclick="fetch('/start')" 
+            style="padding:15px; font-size:18px; margin-right:20px;">
+        ▶ Start Streaming
+    </button>
+
+    <button onclick="fetch('/stop')" 
+            style="padding:15px; font-size:18px; background:red; color:white;">
+        ■ Stop Streaming
+    </button>
+
+    <p style="margin-top:40px; font-size:18px;">
+        Server video at: <b>http://SERVER_IP:5000</b>
+    </p>
+</body>
+</html>
