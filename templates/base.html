@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Messenger</title>
+    <style>
+        body { display: flex; font-family: Arial; margin: 0; }
+        .sidebar {
+            width: 200px; background: #f3f3f3; height: 100vh;
+            padding: 20px; box-sizing: border-box;
+        }
+        .sidebar a {
+            display: block; padding: 10px; text-decoration: none; 
+            color: black; margin-bottom: 5px; border-radius: 5px;
+        }
+        .sidebar a:hover { background: #ddd; }
+        .content { padding: 20px; width: 100%; }
+        .message-box { border: 1px solid #ccc; padding: 10px; height: 400px; overflow-y: scroll; }
+        .msg { margin-bottom: 10px; background: #eee; padding: 8px; border-radius: 5px; }
+    </style>
+</head>
+<body>
+
+<div class="sidebar">
+    <h3>Friends</h3>
+    {% for f in friends %}
+        <a href="{{ url_for('chat', friend=f) }}">{{ f }}</a>
+    {% endfor %}
+</div>
+
+<div class="content">
+    {% block content %}{% endblock %}
+</div>
+
+</body>
+</html>
