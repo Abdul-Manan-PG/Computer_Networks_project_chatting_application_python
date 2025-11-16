@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Client Stream Control</title>
+    <style>
+        /* --- General Page Style --- */
+        body {
+            /* Use a modern, clean font stack */
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, 
+                         Helvetica, Arial, sans-serif;
+            
+            /* A soft background color instead of pure white */
+            background-color: #f0f2f5;
+            
+            /* Use Flexbox to perfectly center the content */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+        }
+
+        /* --- The Content Card --- */
+        .container {
+            background: #ffffff;
+            padding: 30px 40px;
+            border-radius: 12px; /* Rounded corners */
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.07); /* Soft shadow */
+            text-align: center;
+            width: 90%;
+            max-width: 450px;
+        }
+
+        /* --- Heading --- */
+        h1 {
+            color: #333;
+            font-size: 2em;
+            margin-top: 0;
+        }
+
+        /* --- Toggle Button (Base "Start" State) --- */
+        #toggleButton {
+            font-size: 18px;
+            font-weight: 600;
+            padding: 15px 30px;
+            min-width: 150px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            color: white;
+            
+            /* A nice "start" blue */
+            background-color: #007bff;
+            
+            /* Smooth transitions for color changes */
+            transition: background-color 0.2s ease, transform 0.1s ease;
+        }
+
+        /* --- Button Hover Effect --- */
+        #toggleButton:hover {
+            background-color: #0056b3; /* Darker blue */
+        }
+        
+        /* A subtle "press" effect */
+        #toggleButton:active {
+            transform: scale(0.98);
+        }
+
+        /* --- Button "Stop" State (when .active class is added) --- */
+        #toggleButton.active {
+            background-color: #dc3545; /* Red */
+        }
+
+        #toggleButton.active:hover {
+            background-color: #b02a37; /* Darker red */
+        }
+
+        /* --- Status Message --- */
+        #statusMessage {
+            font-size: 18px;
+            color: #555;
+            margin-top: 40px;
+            margin-bottom: 0;
+        }
+        
+        #statusMessage b {
+            color: #222; /* Make the bold text slightly darker */
+        }
+    </style>
+</head>
+<body>
+
+    <div class="container">
+        <h1>Server live chat</h1>
+
+        <button id="toggleButton" onclick="toggleStream()">
+            ▶ Start
+        </button>
+
+        <p id="statusMessage" style="margin-top:40px; font-size:18px;">
+            Server stopped
+        </p>
+    </div>
+
+    <script>
+        let isStarted = false;
+
+        function toggleStream() {
+            const button = document.getElementById('toggleButton');
+            const status = document.getElementById('statusMessage');
+
+            // 1. Toggle the state
+            isStarted = !isStarted;
+            
+            // 2. Send the correct command
+            fetch(isStarted ? '/start' : '/stop');
+
+            // --- 3. Update the UI based on the new state ---
+
+            // Add or remove the ".active" class
+            button.classList.toggle('active', isStarted);
+
+            // Update the button text
+            button.innerHTML = isStarted ? '■ Stop' : '▶ Start';
+            
+            // Update the status text
+            if (isStarted) {
+                status.innerHTML = 'Server started at: <b>http://SERVER_IP:5000</b>';
+            } else {
+                status.innerHTML = 'Server stopped';
+            }
+        }
+    </script>
+
+</body>
+</html>
