@@ -1,0 +1,33 @@
+*{box-sizing:border-box;font-family:Inter,Segoe UI,Arial;margin:0;padding:0}
+body,html,#app{height:100%}
+.app{display:flex;height:100vh}
+.sidebar{width:260px;background:#2b2f33;color:#fff;padding:20px;display:flex;flex-direction:column}
+.logo{font-weight:700;font-size:20px;margin-bottom:12px}
+.friends{overflow:auto}
+.friend{display:block;padding:10px;border-radius:6px;color:#ddd;text-decoration:none;margin-bottom:6px}
+.friend:hover{background:rgba(255,255,255,0.03)}
+.friend.active{background:#4a91ff;color:white}
+
+
+.main{flex:1;background:#f3f5f7;padding:20px;display:flex;flex-direction:column}
+.header{display:flex;align-items:center;justify-content:space-between;padding:10px;background:white;border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,0.05)}
+.title{font-weight:600}
+.actions .icon-btn{margin-left:8px;padding:6px 10px;border-radius:6px;border:0;background:#e9eefc}
+
+
+.chat-window{flex:1;margin-top:12px;overflow:auto;padding:12px;background:linear-gradient(180deg,#fff,#f9fbfc);border-radius:8px}
+.message{display:flex;margin-bottom:10px}
+.message.me{justify-content:flex-end}
+.bubble{max-width:60%;padding:10px;border-radius:10px;background:white;box-shadow:0 1px 0 rgba(0,0,0,0.03)}
+.message.me .bubble{background:#dcf8c6}
+.time{font-size:11px;color:#666;margin-top:6px;text-align:right}
+.composer{display:flex;gap:8px;padding:10px;margin-top:12px}
+.composer input[type=text], .composer input[type="text"]{flex:1;padding:10px;border-radius:8px;border:1px solid #ddd}
+.composer button{padding:8px 12px;border-radius:8px;border:0;background:#4a91ff;color:white}
+.empty{display:flex;align-items:center;justify-content:center;flex:1}
+.file-label{cursor:pointer;padding:8px}
+
+
+@media(max-width:800px){
+.sidebar{display:none}
+}

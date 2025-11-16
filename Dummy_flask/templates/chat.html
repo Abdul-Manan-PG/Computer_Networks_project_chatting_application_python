@@ -1,0 +1,101 @@
+{% extends 'base.html' %}
+{% block content %}
+  <div class="sidebar">
+    <div class="logo">WattApps</div>
+    <div class="friends">
+      {% for f in friends %}
+        <a class="friend {% if active == f %}active{% endif %}" href="/chat/{{ f }}">{{ f }}</a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="main">
+    {% if active %}
+      <div class="header">
+        <div class="title">{{ active }}</div>
+        <div class="actions">
+          <button class="icon-btn">📞 Voice</button>
+          <button class="icon-btn">📹 Video</button>
+        </div>
+      </div>
+
+      <div id="chat-window" class="chat-window">
+        {% for m in messages %}
+          <div class="message {% if m.sender == 'me' %}
+              me
+            {% else %}
+              them
+            {% endif %}">
+            <div class="bubble">
+              <div class="text">{{ m.text }}</div>
+              <div class="time">{{ m.time }}</div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <form id="send-form" action="/send" method="post" enctype="multipart/form-data" class="composer">
+        <input type="hidden" name="friend" value="{{ active }}" />
+        <input id="text-input" name="text" placeholder="Type a message" autocomplete="off" />
+        <label class="file-label">📎<input id="file-input" type="file" style="display:none" /></label>
+        <input type="hidden" name="filename" id="filename-hidden" />
+        <button type="submit">Send</button>
+      </form>
+    {% else %}
+      <div class="empty">
+        <h2>Select a friend to open chat</h2>
+      </div>
+    {% endif %}
+  </div>
+
+  <script>
+    const fileInput = document.getElementById('file-input')
+    fileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0]
+      if (!file) return
+      const filenameHidden = document.getElementById('filename-hidden')
+      filenameHidden.value = file.name
+      // submit the form to keep server-side history (no actual upload)
+      document.getElementById('send-form').submit()
+    })
+    
+    // Enhance: allow sending via Enter and use fetch to send without reload
+    const sendForm = document.getElementById('send-form')
+    const textInput = document.getElementById('text-input')
+    if (sendForm && textInput) {
+      sendForm.addEventListener('submit', (e) => {
+        // only fallback to default form submit if file was chosen (we want to keep file handling simple)
+        const filename = document.getElementById('filename-hidden').value
+        if (!filename) {
+          e.preventDefault()
+          // send via fetch to /api/send
+          fetch('/api/send', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ friend: '{{ active }}', text: textInput.value })
+          })
+            .then((r) => r.json())
+            .then((res) => {
+              if (res.ok) {
+                // append message locally for better UX
+                const container = document.getElementById('chat-window')
+                const msgWrap = document.createElement('div')
+                msgWrap.className = 'message me'
+                msgWrap.innerHTML = `<div class="bubble"><div class="text">${escapeHtml(textInput.value)}</div><div class="time">just now</div></div>`
+                container.appendChild(msgWrap)
+                container.scrollTop = container.scrollHeight
+                textInput.value = ''
+              }
+            })
+        }
+      })
+    }
+    
+    function escapeHtml(text) {
+      return text.replace(/[&<>\"]/g, function (tag) {
+        const chars = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }
+        return chars[tag] || tag
+      })
+    }
+  </script>
+{% endblock %}

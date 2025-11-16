@@ -1,0 +1,28 @@
+{
+  "Alice": [
+    {
+      "sender": "Alice",
+      "text": "Hey! How are you?",
+      "time": "2025-11-15 18:00"
+    },
+    {
+      "sender": "me",
+      "text": "I'm good \u2014 working on a Flask demo.",
+      "time": "2025-11-15 18:05"
+    }
+  ],
+  "Bob": [
+    {
+      "sender": "Bob",
+      "text": "Want to play tonight?",
+      "time": "2025-11-12 20:10"
+    }
+  ],
+  "Charlie": [
+    {
+      "sender": "me",
+      "text": "Hello there",
+      "time": "2025-11-16 09:36"
+    }
+  ]
+}
