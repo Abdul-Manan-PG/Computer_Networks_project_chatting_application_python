@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <title>Live Stream</title>
+    <style>
+      body {
+        font-family: Arial;
+        text-align: center;
+        background: #f0f0f0;
+      }
+      
+      .container {
+        display: flex;
+        justify-content: center;
+        gap: 50px;
+        margin-top: 40px;
+      }
+      
+      video,
+      img {
+        width: 400px;
+        height: 300px;
+        object-fit: cover;
+        border: 3px solid black;
+        border-radius: 10px;
+        background: #222;
+      }
+      
+      h2 {
+        margin-bottom: 10px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Streaming Panel</h1>
+
+    <div class="container">
+      <!-- RECEIVER: Show YOUR OWN video -->
+      <div class="sending">
+        <h2>Your Camera</h2>
+        <video id="myVideo" autoplay playsinline></video>
+      </div>
+
+      <!-- SENDER: Show SERVER STREAM -->
+      <div class="recieving">
+        <h2>Incoming Stream (Other Person)</h2>
+        <img src="{{ url_for('video_feed') }}" alt="Receiving stream" />
+      </div>
+    </div>
+
+    <script>
+      // Show YOUR local webcam video
+      const myVideo = document.getElementById('myVideo')
+      
+      navigator.mediaDevices
+        .getUserMedia({ video: true, audio: false })
+        .then((stream) => {
+          myVideo.srcObject = stream
+        })
+        .catch((err) => {
+          console.error('Error accessing camera:', err)
+        })
+      setInterval(() => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 400
+        canvas.height = 300
+        const ctx = canvas.getContext('2d')
+        ctx.drawImage(myVideo, 0, 0, canvas.width, canvas.height)
+      
+        canvas.toBlob((blob) => {
+          const formData = new FormData()
+          formData.append('frame', blob)
+      
+          fetch('/upload_frame', { method: 'POST', body: formData })
+        }, 'image/jpeg')
+      }, 80) // ~12 FPS
+    </script>
+  </body>
+</html>
