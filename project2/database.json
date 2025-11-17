@@ -1,0 +1,20 @@
+{
+  "users": {
+    "Ali": "ali12345",
+    "Manan": "manan123ch",
+    "Umer": "3344umer3"
+  },
+  "friends": {
+    "Manan": [
+      "Umer",
+      "Ali"
+    ],
+    "Ali": [
+      "Manan"
+    ],
+    "Umer": [
+      "Manan",
+      "Ali"
+    ]
+  }
+}

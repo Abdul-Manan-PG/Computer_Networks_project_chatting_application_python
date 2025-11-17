@@ -1,0 +1,297 @@
+{% extends 'base.html' %}
+{% block content %}
+  <div class="sidebar">
+    <div class="logo">WattApps</div>
+    <div class="sidebar-user">
+      Logged in as: <strong>{{ session.username }}</strong><br>
+      (<a href="/logout">Logout</a>)
+    </div>
+    
+    <div class="sidebar-title">Friends</div>
+    <div class="friends">
+      <!-- Loop over the user's specific friend list -->
+      {% for f in friends %}
+        <a class="friend {% if active_friend == f %}active{% endif %}" id="friend-{{ f }}" href="/chat/{{ f }}">
+          <span>{{ f }}</span>
+          <!-- Status dot will be updated by JavaScript -->
+          <span class="status-dot offline"></span>
+        </a>
+      {% endfor %}
+    </div>
+  </div>
+
+  <div class="main">
+    {% if active_friend %}
+      <!-- Header -->
+      <div class="header">
+        <div class="title">
+          {{ active_friend }}
+          <!-- Status text will be updated by JavaScript -->
+          <span id="friend-status" class="status-text"></span>
+        </div>
+        <div class="actions">
+          <!-- Buttons are disabled by default -->
+          <button class="icon-btn" id="voice-call-btn" disabled>📞 Voice</button>
+          <button class="icon-btn" id="video-call-btn" disabled>📹 Video</button>
+        </div>
+      </div>
+
+      <!-- Chat Window -->
+      <div id="chat-window" class="chat-window">
+        <!-- Messages are loaded from the user's specific history -->
+        {% for m in messages %}
+          <div class="message {% if m.sender == 'me' %}me{% else %}them{% endif %}">
+            <div class="bubble">
+              <div class="text">{{ m.text }}</div>
+              <div class="time">{{ m.time }}</div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+
+      <!-- Composer -->
+      <form id="send-form" class="composer">
+        <input id="text-input" placeholder="Type a message" autocomplete="off" />
+        <button type="submit">Send</button>
+      </form>
+    
+    {% else %}
+      <!-- Show this if no friend is selected -->
+      <div class="empty">
+        <h2>Select a friend to start chatting</h2>
+      </div>
+    {% endif %}
+  </div>
+
+  <!-- Video Call Modal (No changes) -->
+  <div id="call-modal" class="call-modal-hidden">
+    <div class="call-window">
+      <video id="remote-video" autoplay playsinline></video>
+      <video id="local-video" autoplay playsinline muted></video>
+      <div class="call-controls">
+        <button id="mute-btn" class="control-btn">🔇 Mute</button>
+        <button id="end-call-btn" class="control-btn end-call">📞 End Call</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Main JavaScript for the app -->
+  <script>
+    // --- Setup ---
+    const socket = io();
+    const MY_USERNAME = '{{ session.username }}';
+    const ACTIVE_FRIEND = '{{ active_friend }}';
+    let ONLINE_USERS = []; // Will be populated by 'user_list_update'
+
+    // --- DOM Elements ---
+    const chatWindow = document.getElementById('chat-window');
+    const sendForm = document.getElementById('send-form');
+    const textInput = document.getElementById('text-input');
+    
+    // Call Elements
+    const callModal = document.getElementById('call-modal');
+    const localVideo = document.getElementById('local-video');
+    const remoteVideo = document.getElementById('remote-video');
+    const videoCallBtn = document.getElementById('video-call-btn');
+    const voiceCallBtn = document.getElementById('voice-call-btn'); // Added voice
+    const muteBtn = document.getElementById('mute-btn');
+    const endCallBtn = document.getElementById('end-call-btn');
+
+    // --- WebRTC Globals ---
+    let peerConnection;
+    let localStream;
+    let isMuted = false;
+    const iceConfig = { 'iceServers': [{ 'urls': 'stun:stun.l.google.com:19302' }] };
+
+    // --- Socket.IO Event Listeners ---
+
+    // 1. Listen for updates to the online user list
+    socket.on('user_list_update', (onlineUserList) => {
+      console.log('Online users:', onlineUserList);
+      ONLINE_USERS = onlineUserList;
+      updateFriendUI();
+    });
+    
+    // 2. Listen for new text messages
+    socket.on('new_message', (msg) => {
+      // Only append the message if it's from the person we're actively chatting with
+      if (msg.sender === ACTIVE_FRIEND) {
+        appendMessage(msg.text, 'them', msg.time);
+      }
+      // You could add a notification for messages from other friends here
+    });
+
+    // 3. WebRTC Signaling Listeners
+    socket.on('webrtc_offer', async (msg) => {
+      console.log('Received WebRTC Offer from', msg.sender);
+      // For simplicity, we only accept calls from the active friend.
+      // A better app would show an "Incoming Call" popup.
+      if (msg.sender !== ACTIVE_FRIEND) {
+        return console.log('Call offer from a non-active friend. Ignoring.');
+      }
+      
+      await startCall(false); // Start call as the receiver
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+      
+      const answer = await peerConnection.createAnswer();
+      await peerConnection.setLocalDescription(answer);
+      
+      socket.emit('webrtc_answer', { recipient: ACTIVE_FRIEND, sdp: peerConnection.localDescription });
+    });
+
+    socket.on('webrtc_answer', async (msg) => {
+      if (msg.sender !== ACTIVE_FRIEND) return;
+      console.log('Received WebRTC Answer');
+      await peerConnection.setRemoteDescription(new RTCSessionDescription(msg.sdp));
+    });
+
+    socket.on('webrtc_candidate', async (msg) => {
+      if (msg.sender !== ACTIVE_FRIEND) return;
+      if (msg.candidate) {
+        await peerConnection.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      }
+    });
+
+    // --- Chat Sending ---
+    if (sendForm && textInput) {
+      sendForm.addEventListener('submit', (e) => {
+        e.preventDefault();
+        const text = textInput.value.trim();
+        if (!text) return;
+
+        // Send message via Socket.IO
+        socket.emit('chat_message', {
+          recipient: ACTIVE_FRIEND,
+          text: text
+        });
+
+        // Append our own message locally
+        appendMessage(text, 'me', 'just now');
+        textInput.value = '';
+      });
+    }
+    
+    // --- UI Helper Functions ---
+    function appendMessage(text, className, time) {
+      if (!chatWindow) return;
+      const msgWrap = document.createElement('div');
+      msgWrap.className = `message ${className}`;
+      msgWrap.innerHTML = `<div class="bubble"><div class="text">${escapeHtml(text)}</div><div class="time">${time}</div></div>`;
+      chatWindow.appendChild(msgWrap);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+    
+    function escapeHtml(text) {
+      return text.replace(/[&<>\"]/g, (tag) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[tag] || tag));
+    }
+    
+    // --- Presence UI Update ---
+    function updateFriendUI() {
+      // Update sidebar status dots
+      document.querySelectorAll('.friend').forEach(el => {
+        const username = el.id.replace('friend-', '');
+        const dot = el.querySelector('.status-dot');
+        if (ONLINE_USERS.includes(username)) {
+          dot.classList.remove('offline');
+          dot.classList.add('online');
+        } else {
+          dot.classList.remove('online');
+          dot.classList.add('offline');
+        }
+      });
+      
+      // Update header status and enable call buttons
+      const friendStatusText = document.getElementById('friend-status');
+      if (friendStatusText) {
+        if (ONLINE_USERS.includes(ACTIVE_FRIEND)) {
+          friendStatusText.textContent = '(Online)';
+          friendStatusText.style.color = '#2ecc71';
+          videoCallBtn.disabled = false;
+          voiceCallBtn.disabled = false;
+        } else {
+          friendStatusText.textContent = '(Offline)';
+          friendStatusText.style.color = 'gray';
+          videoCallBtn.disabled = true;
+          voiceCallBtn.disabled = true;
+        }
+      }
+    }
+    
+    // --- WebRTC Call Logic ---
+    async function startCall(isCaller, mediaType = { video: true, audio: true }) {
+      callModal.className = 'call-modal-visible';
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia(mediaType);
+        localVideo.srcObject = localStream;
+      } catch (err) {
+        console.error('Failed to get local media', err);
+        closeCall();
+        return;
+      }
+
+      peerConnection = new RTCPeerConnection(iceConfig);
+
+      // Event Handlers
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          socket.emit('webrtc_candidate', { recipient: ACTIVE_FRIEND, candidate: event.candidate });
+        }
+      };
+      peerConnection.ontrack = (event) => {
+        remoteVideo.srcObject = event.streams[0];
+      };
+
+      // Add tracks
+      localStream.getTracks().forEach(track => {
+        peerConnection.addTrack(track, localStream);
+      });
+
+      // If we are the one starting the call, create and send an "offer"
+      if (isCaller) {
+        const offer = await peerConnection.createOffer();
+        await peerConnection.setLocalDescription(offer);
+        socket.emit('webrtc_offer', { recipient: ACTIVE_FRIEND, sdp: peerConnection.localDescription });
+      }
+    }
+
+    // --- Call Control Event Listeners ---
+    if (videoCallBtn) {
+      videoCallBtn.addEventListener('click', () => {
+        startCall(true, { video: true, audio: true }); // Start as caller, with video
+      });
+    }
+
+    if (voiceCallBtn) {
+      voiceCallBtn.addEventListener('click', () => {
+        // TODO: You would need to adjust the UI for a voice-only call
+        startCall(true, { video: false, audio: true }); // Start as caller, audio only
+        alert("Starting voice call. UI will still show video for this demo.");
+      });
+    }
+    
+    endCallBtn.addEventListener('click', () => {
+      closeCall();
+      // You should also send a 'hangup' message to the other peer
+    });
+
+    muteBtn.addEventListener('click', () => {
+      isMuted = !isMuted;
+      localStream.getAudioTracks()[0].enabled = !isMuted;
+      muteBtn.textContent = isMuted ? 'Unmute' : 'Mute';
+      muteBtn.classList.toggle('muted', isMuted);
+    });
+    
+    function closeCall() {
+      if (localStream) { localStream.getTracks().forEach(track => track.stop()); }
+      if (peerConnection) { peerConnection.close(); peerConnection = null; }
+      localVideo.srcObject = null;
+      remoteVideo.srcObject = null;
+      callModal.className = 'call-modal-hidden';
+    }
+    
+    // --- Initial UI Update on Page Load ---
+    // Wait a moment for SocketIO to connect and give us the list
+    setTimeout(updateFriendUI, 500); 
+
+  </script>
+{% endblock %}

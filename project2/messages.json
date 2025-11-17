@@ -1,0 +1,46 @@
+{
+  "Umer": {
+    "Manan": [
+      {
+        "sender": "me",
+        "text": "Hey",
+        "time": "2025-11-17 11:03"
+      },
+      {
+        "sender": "Manan",
+        "text": "Hello there",
+        "time": "2025-11-17 11:05"
+      }
+    ]
+  },
+  "Manan": {
+    "Umer": [
+      {
+        "sender": "Umer",
+        "text": "Hey",
+        "time": "2025-11-17 11:03"
+      },
+      {
+        "sender": "me",
+        "text": "Hello there",
+        "time": "2025-11-17 11:05"
+      }
+    ],
+    "Ali": [
+      {
+        "sender": "Ali",
+        "text": "hello",
+        "time": "2025-11-17 11:06"
+      }
+    ]
+  },
+  "Ali": {
+    "Manan": [
+      {
+        "sender": "me",
+        "text": "hello",
+        "time": "2025-11-17 11:06"
+      }
+    ]
+  }
+}
