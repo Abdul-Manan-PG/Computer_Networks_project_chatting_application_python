@@ -29,7 +29,7 @@ def video_call_request(caller, receiver):
         return
 
     # Send request
-    receiver_sock.send(f"{caller} is calling you".encode())
+    receiver_sock.send(f"{caller}::: calling".encode())
 
     # Wait for response
     try:
