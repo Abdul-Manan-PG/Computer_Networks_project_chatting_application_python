@@ -1,7 +1,7 @@
 import socket
 import threading
 
-HOST = "10.75.24.57"
+HOST = "10.75.16.29"
 PORT = 5000
 
 clients = {}         # username -> socket

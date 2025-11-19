@@ -6,7 +6,7 @@ import pyaudio
 from flask import Flask, Response
 import time
 
-SERVER_IP = "10.75.24.57"   # Update to your server's IP
+SERVER_IP = "10.75.16.29"   # Update to your server's IP
 SERVER_PORT = 5000
 app = Flask(__name__)
 
@@ -149,12 +149,12 @@ def receive_messages(sock):
                 if ans.lower() == 'y':
                     _ = sock.recv(1024)
                     port1 = get_free_port()
+                    threading.Thread(target=video_receiver, args=[port1], daemon=True).start()
                     port2 = get_free_port()
+                    threading.Thread(target=audio_receiver, args=[port2], daemon=True).start()
                     my_ip = get_my_ip()
                     message = f"{my_ip}:{port1}:{port2}"
                     sock.send(message.encode())
-                    threading.Thread(target=video_receiver, args=[port1], daemon=True).start()
-                    threading.Thread(target=audio_receiver, args=[port2], daemon=True).start()
                     msg = sock.recv(1024).decode()
                     IP, port3, port4 = msg.split(":", 2)
                     threading.Thread(target=send_video, args=[IP, int(port3)], daemon=True).start()
@@ -204,8 +204,8 @@ def client_program():
                 response = client.recv(1024).decode()
                 if response == "200":
                     port3 = get_free_port()
-                    port4 = get_free_port()
                     threading.Thread(target=video_receiver, args=[port3], daemon=True).start()
+                    port4 = get_free_port()
                     threading.Thread(target=audio_receiver, args=[port4], daemon=True).start()
                     my_ip = get_my_ip()
                     message = f"{my_ip}:{port3}:{port4}"
