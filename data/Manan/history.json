@@ -70,5 +70,21 @@
     "content": "wow",
     "is_room": false,
     "timestamp": 1763639400.8818219
+  },
+  {
+    "type": "MSG",
+    "sender": "Alice",
+    "target": "Manan",
+    "content": "Hello",
+    "is_room": false,
+    "timestamp": 1763659683.6225064
+  },
+  {
+    "type": "MSG",
+    "sender": "Manan",
+    "target": "Alice",
+    "content": "Ali",
+    "is_room": false,
+    "timestamp": 1763659691.3231227
   }
 ]
