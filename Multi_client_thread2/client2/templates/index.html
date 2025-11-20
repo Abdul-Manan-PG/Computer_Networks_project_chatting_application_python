@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <title>Chat Client</title>
+    <script src="//cdnjs.cloudflare.com/ajax/libs/socket.io/4.4.1/socket.io.min.js"></script>
+</head>
+<body>
+    <h2>Chat Client</h2>
+
+    <div id="connection">
+        Username: <input id="username" type="text" />
+        <button onclick="connect()">Connect</button>
+    </div>
+
+    <div id="chat" style="display:none;">
+        <div id="messages" style="border:1px solid #ccc; height: 300px; width: 500px; overflow-y: scroll; padding: 5px;"></div>
+        <input id="msg" type="text" style="width:400px;" placeholder="Type message or username:::call" />
+        <button onclick="sendMessage()">Send</button>
+    </div>
+
+    <div id="callPrompt" style="display:none; border:1px solid red; padding: 10px; margin-top:10px;">
+        Incoming call from <span id="callerName"></span>!
+        <button onclick="answerCall('y')">Accept</button>
+        <button onclick="answerCall('n')">Decline</button>
+    </div>
+
+    <script>
+        const socket = io();
+
+        function connect() {
+            const username = document.getElementById('username').value.trim();
+            if (!username) {
+                alert('Enter username.');
+                return;
+            }
+            socket.emit('connect_to_server', {username});
+        }
+
+        socket.on('status', data => {
+            addMessage('[Status] ' + data.msg);
+            if(data.msg.includes('Connected')) {
+                document.getElementById('connection').style.display = 'none';
+                document.getElementById('chat').style.display = 'block';
+            }
+        });
+
+        socket.on('message', data => {
+            addMessage(data.msg);
+        });
+
+        socket.on('incoming_call', data => {
+            document.getElementById('callerName').innerText = data.caller;
+            document.getElementById('callPrompt').style.display = 'block';
+        });
+
+        socket.on('call_response', data => {
+            addMessage('[Call] ' + data.msg);
+        });
+
+        socket.on('call_accepted', data => {
+            addMessage('[Call] ' + data.msg);
+        });
+
+        function sendMessage() {
+            let msgInput = document.getElementById('msg');
+            const msg = msgInput.value.trim();
+            if (!msg) return;
+            msgInput.value = '';
+            if (msg.includes(':::call')) {
+                const target = msg.split(':::')[0];
+                socket.emit('start_call', {target});
+            } else {
+                socket.emit('send_message', {msg});
+            }
+        }
+
+        function answerCall(answer) {
+            document.getElementById('callPrompt').style.display = 'none';
+            socket.emit('answer_call', {answer});
+            if(answer === 'y') {
+                addMessage('[Call] You accepted the call');
+            } else {
+                addMessage('[Call] You declined the call');
+            }
+        }
+
+        function addMessage(msg) {
+            const messagesDiv = document.getElementById('messages');
+            messagesDiv.innerHTML += '<div>' + msg + '</div>';
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+    </script>
+</body>
+</html>
