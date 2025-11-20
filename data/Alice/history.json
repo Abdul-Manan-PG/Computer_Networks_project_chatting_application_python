@@ -1,0 +1,42 @@
+[
+  {
+    "type": "MSG",
+    "sender": "Manan",
+    "target": "Alice",
+    "content": "Hello",
+    "is_room": false,
+    "timestamp": 1763639020.7011678
+  },
+  {
+    "type": "MSG",
+    "sender": "Alice",
+    "target": "Manan",
+    "content": "Hello",
+    "is_room": false,
+    "timestamp": 1763639030.4629767
+  },
+  {
+    "type": "MSG",
+    "sender": "Manan",
+    "target": "Alice",
+    "content": "hey",
+    "is_room": false,
+    "timestamp": 1763639038.0652606
+  },
+  {
+    "type": "MSG",
+    "sender": "Alice",
+    "target": "Manan",
+    "content": "hey",
+    "is_room": false,
+    "timestamp": 1763639191.9111288
+  },
+  {
+    "type": "MSG",
+    "sender": "Manan",
+    "target": "Alice",
+    "content": "..",
+    "is_room": false,
+    "timestamp": 1763639199.0923655
+  }
+]

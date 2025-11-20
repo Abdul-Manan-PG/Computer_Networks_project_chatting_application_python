@@ -1,0 +1,45 @@
+[
+  {
+    "timestamp": 1715501000.123,
+    "sender": "Manan",
+    "target": "Ali",
+    "content": "Hey Bob, did you get the server running?",
+    "is_room": false
+  },
+  {
+    "timestamp": 1715501005.456,
+    "sender": "Ali",
+    "target": "Manan",
+    "content": "Yes, just finished configuring the TCP listener.",
+    "is_room": false
+  },
+  {
+    "timestamp": 1715501015.789,
+    "sender": "Manan",
+    "target": "ALi",
+    "content": "Great! Let's test the video stream next.",
+    "is_room": false
+  },
+  {
+    "timestamp": 1715501200.000,
+    "sender": "Ahsan",
+    "target": "#general",
+    "content": "Hello everyone! Is the meeting starting soon?",
+    "is_room": true
+  },
+  {
+    "timestamp": 1715501250.111,
+    "sender": "Ali",
+    "target": "#general",
+    "content": "Joining in 5 minutes.",
+    "is_room": true
+  },
+  {
+    "timestamp": 1715505000.999,
+    "sender": "Manan",
+    "target": "Ali",
+    "content": "📁 Sent file: server_logs.txt",
+    "is_room": false,
+    "is_file": true
+  }
+]

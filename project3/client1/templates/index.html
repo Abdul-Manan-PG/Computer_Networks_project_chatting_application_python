@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Hybrid Chat</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-gray-100 font-sans h-screen flex flex-col overflow-hidden">
+
+    <div id="login-modal" class="fixed inset-0 bg-black bg-opacity-90 flex items-center justify-center z-50">
+        <div class="bg-gray-800 p-8 rounded-lg w-96 text-center">
+            <h2 class="text-2xl font-bold mb-4 text-green-500">Hybrid Chat</h2>
+            <input type="text" id="username-input" placeholder="Enter Username" class="w-full p-2 mb-4 rounded bg-gray-700 text-white">
+            <button onclick="login()" class="w-full bg-green-600 hover:bg-green-700 text-white p-2 rounded font-bold">Connect</button>
+            <p id="status-msg" class="text-red-500 mt-2 text-sm"></p>
+        </div>
+    </div>
+
+    <div class="flex h-full hidden" id="app-container">
+        <div class="w-1/4 bg-gray-800 border-r border-gray-700 flex flex-col">
+            <div class="p-4 border-b border-gray-700">
+                <h3 class="font-bold" id="my-username">Guest</h3>
+            </div>
+            <div class="p-2 flex border-b border-gray-700">
+                <input id="room-input" placeholder="Room Name" class="flex-1 bg-gray-700 p-1 text-sm rounded-l">
+                <button onclick="joinRoom()" class="bg-blue-600 px-2 text-sm rounded-r">Join</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-2">
+                <ul id="users-list" class="space-y-1"></ul>
+            </div>
+        </div>
+
+        <div class="flex-1 flex flex-col bg-gray-900 relative">
+            <div class="p-4 border-b border-gray-700 flex justify-between bg-gray-800">
+                <h3 class="font-bold" id="current-target">Select a user or room</h3>
+                <div>
+                    <button onclick="startVideo()" class="bg-green-600 text-sm px-3 py-1 rounded">Start Video</button>
+                    <button onclick="stopVideo()" class="bg-red-600 text-sm px-3 py-1 rounded hidden" id="stop-btn">Stop</button>
+                </div>
+            </div>
+
+            <div id="video-area" class="hidden absolute top-16 right-4 bg-black p-2 border border-gray-700 z-10 w-64">
+                <p class="text-xs text-gray-400">Incoming</p>
+                <img id="remote-video" class="w-full h-40 bg-gray-800 object-cover mb-2">
+                <p class="text-xs text-gray-400">Self</p>
+                <video id="local-video" autoplay muted class="w-full h-24 object-cover opacity-50"></video>
+            </div>
+
+            <div id="messages" class="flex-1 overflow-y-auto p-4 space-y-2"></div>
+
+            <div class="p-4 bg-gray-800 flex">
+                <input type="text" id="msg-input" class="flex-1 p-2 bg-gray-700 rounded-l" placeholder="Message...">
+                <button onclick="sendMessage()" class="bg-green-600 px-4 rounded-r">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <canvas id="video-canvas" style="display:none;"></canvas>
+
+    <script>
+        const socket = io();
+        let myUsername = "";
+        let currentTarget = null;
+        let isRoom = false;
+        let videoInterval = null;
+
+        function login() {
+            const u = document.getElementById('username-input').value;
+            if(u) socket.emit('login', {username: u});
+        }
+
+        socket.on('login_success', (data) => {
+            myUsername = data.username;
+            document.getElementById('my-username').innerText = myUsername;
+            document.getElementById('login-modal').classList.add('hidden');
+            document.getElementById('app-container').classList.remove('hidden');
+        });
+
+        socket.on('status', (d) => document.getElementById('status-msg').innerText = d.msg);
+
+        // CHANGED: Logic to handle Objects with Status (Online/Offline)
+        socket.on('frontend_user_update', (data) => {
+            const list = document.getElementById('users-list');
+            list.innerHTML = "";
+            
+            // Sort: Online users first, then Offline
+            data.users.sort((a, b) => {
+                if (a.status === 'online' && b.status === 'offline') return -1;
+                if (a.status === 'offline' && b.status === 'online') return 1;
+                return 0;
+            });
+
+            data.users.forEach(userObj => {
+                const u = userObj.username;
+                const status = userObj.status;
+
+                const li = document.createElement('li');
+                li.className = "p-2 hover:bg-gray-700 cursor-pointer rounded flex items-center justify-between";
+                
+                let statusColor = "bg-gray-500"; // Default Offline
+                if (status === 'online') statusColor = "bg-green-500";
+                if (status === 'room') statusColor = "bg-blue-500";
+
+                // Label text (Online/Offline)
+                let statusText = status === 'online' ? 'Online' : 'Offline';
+                if(status === 'room') statusText = '';
+
+                if(status === 'room') {
+                     li.innerHTML = `
+                        <div class="flex items-center">
+                            <span class="text-blue-400 mr-2 font-bold">#</span>
+                            <span>${u.substring(1)}</span>
+                        </div>`;
+                     li.onclick = () => selectTarget(u.substring(1), true);
+                } else {
+                    li.innerHTML = `
+                        <div class="flex items-center">
+                            <div class="w-2 h-2 ${statusColor} rounded-full mr-2"></div>
+                            <span class="${status === 'offline' ? 'text-gray-400' : 'text-white'}">${u}</span>
+                        </div>
+                        <span class="text-[10px] uppercase text-gray-500">${statusText}</span>
+                    `;
+                    li.onclick = () => selectTarget(u, false);
+                }
+                list.appendChild(li);
+            });
+        });
+
+        function joinRoom() {
+            const r = document.getElementById('room-input').value;
+            if(r) socket.emit('join_room', {room: r});
+        }
+
+        function selectTarget(target, roomStatus) {
+            currentTarget = target;
+            isRoom = roomStatus;
+            document.getElementById('current-target').innerText = (isRoom ? '#' : '') + target;
+            document.getElementById('messages').innerHTML = ''; 
+        }
+
+        function sendMessage() {
+            const txt = document.getElementById('msg-input').value;
+            if(!txt || !currentTarget) return;
+            socket.emit('send_chat', {target: currentTarget, message: txt, is_room: isRoom});
+            addMessage(myUsername, txt, 'self');
+            document.getElementById('msg-input').value = "";
+        }
+
+        socket.on('receive_message', (data) => {
+            if(data.sender === myUsername) return;
+            if((isRoom && data.target === currentTarget) || (!isRoom && data.sender === currentTarget)) {
+                addMessage(data.sender, data.content, 'other');
+            }
+        });
+
+        function addMessage(sender, text, type) {
+            const div = document.createElement('div');
+            div.className = `flex flex-col ${type === 'self' ? 'items-end' : 'items-start'}`;
+            div.innerHTML = `<div class="max-w-xs px-3 py-2 rounded-lg ${type === 'self' ? 'bg-green-600' : 'bg-gray-700'}">
+                <span class="text-xs text-gray-400 block">${sender}</span>${text}</div>`;
+            document.getElementById('messages').appendChild(div);
+        }
+
+        // --- Video Logic ---
+        async function startVideo() {
+            if(!currentTarget) return alert("Select a user/room first");
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({video: true});
+                const vid = document.getElementById('local-video');
+                vid.srcObject = stream;
+                document.getElementById('video-area').classList.remove('hidden');
+                document.getElementById('stop-btn').classList.remove('hidden');
+                const canvas = document.getElementById('video-canvas');
+                const ctx = canvas.getContext('2d');
+                videoInterval = setInterval(() => {
+                    canvas.width = 320; canvas.height = 240;
+                    ctx.drawImage(vid, 0, 0, 320, 240);
+                    const data = canvas.toDataURL('image/jpeg', 0.3); 
+                    const b64 = data.split(',')[1];
+                    socket.emit('stream_media', {target: currentTarget, data: b64});
+                }, 100); 
+            } catch(e) { alert("Camera Error"); }
+        }
+
+        function stopVideo() {
+            clearInterval(videoInterval);
+            document.getElementById('video-area').classList.add('hidden');
+            document.getElementById('stop-btn').classList.add('hidden');
+            const vid = document.getElementById('local-video');
+            if(vid.srcObject) vid.srcObject.getTracks().forEach(t => t.stop());
+        }
+
+        socket.on('incoming_media', (data) => {
+            document.getElementById('video-area').classList.remove('hidden');
+            document.getElementById('remote-video').src = "data:image/jpeg;base64," + data.data;
+        });
+    </script>
+</body>
+</html>
