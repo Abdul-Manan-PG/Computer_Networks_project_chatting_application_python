@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
+    <style>
+        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; }
+        #sidebar { width: 250px; background: #2c3e50; color: white; padding: 20px; display: flex; flex-direction: column; }
+        #main { flex: 1; display: flex; flex-direction: column; background: #ecf0f1; position: relative; }
+        #chat-area { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        #input-area { padding: 15px; background: white; display: flex; gap: 10px; align-items: center; border-top: 1px solid #ddd; }
+        
+        .message { padding: 10px; background: white; border-radius: 8px; max-width: 60%; word-wrap: break-word; }
+        .message.me { background: #dcf8c6; align-self: flex-end; }
+        .message.other { background: white; align-self: flex-start; }
+        
+        .msg-img { max-width: 100%; border-radius: 5px; cursor: pointer; }
+        .msg-video { max-width: 100%; border-radius: 5px; }
+        .msg-audio { width: 100%; min-width: 250px; }
+        .msg-file { display: flex; align-items: center; gap: 10px; text-decoration: none; color: #34495e; background: #eee; padding: 10px; border-radius: 5px;}
+        
+        input[type="text"] { padding: 10px; border: 1px solid #ddd; border-radius: 20px; flex: 1; outline: none; }
+        .icon-btn { background: none; border: none; font-size: 1.2rem; color: #7f8c8d; cursor: pointer; padding: 10px; }
+        .icon-btn:hover { color: #3498db; }
+        
+        .friend-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #34495e; display: flex; justify-content: space-between; align-items: center;}
+        .friend-item.active { background: #1abc9c; }
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #95a5a6; display: inline-block; }
+        .status-dot.online { background: #2ecc71; box-shadow: 0 0 5px #2ecc71; }
+        
+        /* Modals */
+        .modal { display: none; position: fixed; z-index: 100; left: 0; top: 0; width: 100%; height: 100%; background-color: rgba(0,0,0,0.5); align-items: center; justify-content: center; }
+        .modal-content { background-color: white; padding: 20px; border-radius: 10px; text-align: center; width: 400px; box-shadow: 0 5px 15px rgba(0,0,0,0.3); position: relative; }
+        .call-btn { padding: 10px 20px; margin: 10px; border: none; border-radius: 5px; cursor: pointer; color: white; font-weight: bold; }
+        .btn-accept { background-color: #2ecc71; }
+        .btn-decline, .btn-end { background-color: #e74c3c; }
+        
+        /* Video Elements */
+        #remoteVideo { width: 100%; max-height: 300px; background: black; border-radius: 8px; margin-bottom: 10px; }
+        #localVideo { width: 100px; position: absolute; bottom: 20px; right: 20px; border: 2px solid white; border-radius: 5px; z-index: 10; }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h3>{{ username }}</h3>
+        <div id="connection-warning" style="background:#c0392b; color:white; display:none; text-align:center;">Disconnected</div>
+        <div style="margin-top: 20px;">
+            <input type="text" id="new-friend-name" placeholder="Add friend..." style="width: 100%; box-sizing: border-box;">
+            <button onclick="addFriend()" style="width: 100%; margin-top: 5px; background: #27ae60; border:none; padding:8px; color:white; cursor:pointer;">Add</button>
+        </div>
+        <h4 style="margin-top: 30px;">Friends</h4>
+        <button onclick="refreshFriends()" style="background: #7f8c8d; font-size: 0.8em; border:none; padding:5px; color:white; cursor:pointer; width:100%">Refresh List</button>
+        <div id="friends-list" style="margin-top: 10px;"></div>
+        <a href="/logout"><button style="background: #c0392b; margin-top: auto; width: 100%; color: white; border: none; padding: 10px; cursor: pointer;">Logout</button></a>
+    </div>
+
+    <div id="main">
+        <div style="padding: 15px; background: white; border-bottom: 1px solid #ddd; display:flex; justify-content: space-between; align-items: center;">
+            <span id="chat-title">Select a friend</span>
+            <div>
+                <button onclick="startCall('voice')" class="icon-btn" id="btn-voice-call" disabled title="Voice Call"><i class="fas fa-phone"></i></button>
+                <button onclick="startCall('video')" class="icon-btn" id="btn-video-call" disabled title="Video Call"><i class="fas fa-video"></i></button>
+            </div>
+        </div>
+        <div id="chat-area"></div>
+        <div id="input-area">
+            <input type="file" id="file-input" style="display: none;" onchange="handleFileUpload(this)">
+            <button class="icon-btn" onclick="document.getElementById('file-input').click()" id="btn-attach" disabled><i class="fas fa-paperclip"></i></button>
+            <input type="text" id="msg-input" placeholder="Type a message..." disabled>
+            <button class="icon-btn" onclick="sendMessage()" id="btn-send" disabled style="color: #3498db;"><i class="fas fa-paper-plane"></i></button>
+        </div>
+    </div>
+
+    <!-- Call Modals -->
+    <div id="incoming-modal" class="modal">
+        <div class="modal-content">
+            <h3 id="incoming-text">Incoming Call...</h3>
+            <button class="call-btn btn-accept" onclick="acceptCall()">Accept</button>
+            <button class="call-btn btn-decline" onclick="declineCall()">Decline</button>
+        </div>
+    </div>
+
+    <div id="outgoing-modal" class="modal">
+        <div class="modal-content">
+            <h3>Calling...</h3>
+            <p id="outgoing-name">User</p>
+            <button class="call-btn btn-end" onclick="endCall(true)">End Call</button>
+        </div>
+    </div>
+
+    <div id="active-modal" class="modal">
+        <div class="modal-content" style="width: 500px;">
+            <video id="remoteVideo" autoplay playsinline></video>
+            <video id="localVideo" autoplay playsinline muted></video>
+            <h3 id="active-name">User</h3>
+            <button class="call-btn btn-end" onclick="endCall(false)">End Call</button>
+        </div>
+    </div>
+
+    <script>
+        let currentChatUser = null;
+        let incomingCaller = null;
+        let activeCallPartner = null;
+        let peerConnection = null;
+        let localStream = null;
+        const username = "{{ username }}";
+
+        // WebRTC Config
+        const rtcConfig = {
+            iceServers: [{ urls: 'stun:stun.l.google.com:19302' }]
+        };
+
+        window.onload = refreshFriends;
+        setInterval(fetchUpdates, 1000);
+
+        async function fetchUpdates() {
+            try {
+                const res = await fetch('/api/updates');
+                const data = await res.json();
+                document.getElementById('connection-warning').style.display = data.connected ? 'none' : 'block';
+
+                data.messages.forEach(msg => {
+                    if (msg.type === 'STATUS_UPDATE') {
+                        refreshFriends(true);
+                        if(msg.username === currentChatUser) {
+                            msg.status === 'Offline' ? disableChatInput() : enableChatInput();
+                        }
+                    } 
+                    else if (msg.type === 'MESSAGE' && msg.from === currentChatUser) {
+                        appendMessage(msg.from, msg.content, msg.msg_type, msg.timestamp);
+                    } 
+                    else if (msg.type === 'INCOMING_CALL') {
+                        showIncomingCall(msg.from, msg.call_type);
+                    } 
+                    else if (msg.type === 'WEBRTC_SIGNAL') {
+                        handleSignal(msg.signal_data);
+                    }
+                    else if (msg.type === 'CALL_ENDED') {
+                        hangUp();
+                        alert("Call Ended");
+                    }
+                });
+            } catch (e) { }
+        }
+
+        // --- Friend List Logic ---
+        async function refreshFriends(silent=false) {
+            try {
+                // Use local API which gets from persistent DB
+                const res = await fetch('/api/get_friends');
+                const json = await res.json();
+                if(json.data && json.data.length > 0) renderFriends(json.data);
+            } catch(e) {}
+        }
+
+        function renderFriends(list) {
+            const container = document.getElementById('friends-list');
+            // Only re-render if necessary, or just clear and fill
+            container.innerHTML = '';
+            list.forEach(obj => {
+                const div = document.createElement('div');
+                div.className = 'friend-item';
+                div.setAttribute('data-name', obj.username);
+                if(obj.username === currentChatUser) {
+                    div.classList.add('active');
+                    obj.status === 'Offline' ? disableChatInput() : enableChatInput();
+                }
+                div.innerHTML = `<span>${obj.username}</span><span class="status-dot ${obj.status.toLowerCase()}"></span>`;
+                div.onclick = () => selectFriend(obj.username, obj.status);
+                container.appendChild(div);
+            });
+        }
+
+        // --- WebRTC Logic ---
+        async function startCall(type) {
+            if (!currentChatUser) return;
+            document.getElementById('outgoing-name').innerText = currentChatUser;
+            document.getElementById('outgoing-modal').style.display = 'flex';
+            activeCallPartner = currentChatUser;
+
+            // Init Signal
+            await fetch('/api/init_call', {
+                method: 'POST', 
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ target: currentChatUser, type: type })
+            });
+
+            // Setup Local Media
+            const video = type === 'video';
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: video });
+                document.getElementById('localVideo').srcObject = localStream;
+                createPeerConnection();
+                
+                // Add tracks
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+                
+                // Create Offer
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+                sendSignal({ type: 'offer', sdp: offer });
+            } catch(e) { console.error("Media Error", e); }
+        }
+
+        function showIncomingCall(caller, type) {
+            incomingCaller = caller;
+            document.getElementById('incoming-text').innerText = `Incoming ${type} Call from ${caller}`;
+            document.getElementById('incoming-modal').style.display = 'flex';
+        }
+
+        async function acceptCall() {
+            document.getElementById('incoming-modal').style.display = 'none';
+            activeCallPartner = incomingCaller;
+            showActiveCall(incomingCaller);
+
+            try {
+                // Assume voice only unless video is requested (simplification)
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+                document.getElementById('localVideo').srcObject = localStream;
+                createPeerConnection();
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+            } catch(e) { console.error("Media Error", e); }
+        }
+
+        function declineCall() {
+            document.getElementById('incoming-modal').style.display = 'none';
+            sendEndSignal(incomingCaller);
+            incomingCaller = null;
+        }
+
+        function createPeerConnection() {
+            peerConnection = new RTCPeerConnection(rtcConfig);
+            
+            peerConnection.onicecandidate = (event) => {
+                if (event.candidate) {
+                    sendSignal({ type: 'candidate', candidate: event.candidate });
+                }
+            };
+
+            peerConnection.ontrack = (event) => {
+                document.getElementById('remoteVideo').srcObject = event.streams[0];
+            };
+        }
+
+        async function handleSignal(data) {
+            if (!activeCallPartner) activeCallPartner = incomingCaller; // Ensure partner is set if we are answering
+
+            if (!peerConnection) createPeerConnection();
+
+            if (data.type === 'offer') {
+                // Received Offer -> Send Answer
+                document.getElementById('incoming-modal').style.display = 'none'; // In case it's still up
+                showActiveCall(activeCallPartner);
+                
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+                const answer = await peerConnection.createAnswer();
+                await peerConnection.setLocalDescription(answer);
+                sendSignal({ type: 'answer', sdp: answer });
+            } 
+            else if (data.type === 'answer') {
+                // Received Answer
+                document.getElementById('outgoing-modal').style.display = 'none';
+                showActiveCall(activeCallPartner);
+                await peerConnection.setRemoteDescription(new RTCSessionDescription(data.sdp));
+            } 
+            else if (data.type === 'candidate') {
+                // Received ICE Candidate
+                if (peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(data.candidate));
+                }
+            }
+        }
+
+        async function sendSignal(data) {
+            await fetch('/api/send_signal', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ to: activeCallPartner, signal_data: data })
+            });
+        }
+
+        function showActiveCall(partner) {
+            document.getElementById('active-name').innerText = partner;
+            document.getElementById('active-modal').style.display = 'flex';
+        }
+
+        async function endCall(isOutgoing) {
+            const partner = isOutgoing ? currentChatUser : activeCallPartner;
+            hangUp();
+            if(partner) sendEndSignal(partner);
+        }
+
+        async function sendEndSignal(partner) {
+            await fetch('/api/end_call', {
+                method: 'POST', headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ other_party: partner })
+            });
+        }
+
+        function hangUp() {
+            if(peerConnection) peerConnection.close();
+            if(localStream) localStream.getTracks().forEach(track => track.stop());
+            peerConnection = null;
+            localStream = null;
+            closeAllModals();
+        }
+
+        function closeAllModals() {
+            document.getElementById('incoming-modal').style.display = 'none';
+            document.getElementById('outgoing-modal').style.display = 'none';
+            document.getElementById('active-modal').style.display = 'none';
+            activeCallPartner = null;
+        }
+
+        // --- Utils ---
+        async function selectFriend(name, status) {
+            currentChatUser = name;
+            document.getElementById('chat-title').innerText = name;
+            status === 'Offline' ? disableChatInput() : enableChatInput();
+            document.querySelectorAll('.friend-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll(`[data-name="${name}"]`).forEach(el => el.classList.add('active'));
+            const area = document.getElementById('chat-area');
+            area.innerHTML = 'Loading...';
+            const res = await fetch(`/api/history/${name}`);
+            const history = await res.json();
+            area.innerHTML = '';
+            history.forEach(msg => appendMessage(msg.from === username ? 'Me' : msg.from, msg.content, msg.msg_type, msg.timestamp));
+        }
+
+        function appendMessage(sender, content, type, time) {
+            const div = document.createElement('div');
+            div.className = `message ${sender === 'Me' ? 'me' : 'other'}`;
+            let body = "";
+            const path = `/static/uploads/${content}`;
+            if (type === 'text') body = `<span>${content}</span>`;
+            else if (type === 'image') body = `<img src="${path}" class="msg-img" onclick="window.open(this.src)">`;
+            else if (type === 'video') body = `<video src="${path}" controls class="msg-video"></video>`;
+            else if (type === 'audio') body = `<audio src="${path}" controls class="msg-audio"></audio>`;
+            else body = `<a href="${path}" download class="msg-file"><i class="fas fa-file"></i> ${content}</a>`;
+            div.innerHTML = `<strong>${sender}</strong><br>${body}<br><small style="font-size:0.7em; opacity:0.7">${time}</small>`;
+            const area = document.getElementById('chat-area');
+            area.appendChild(div);
+            area.scrollTop = area.scrollHeight;
+        }
+
+        async function handleFileUpload(input) {
+            const file = input.files[0];
+            if (!file || !currentChatUser) return;
+            let type = 'file';
+            if (file.type.startsWith('image/')) type = 'image';
+            else if (file.type.startsWith('video/')) type = 'video';
+            else if (file.type.startsWith('audio/')) type = 'audio';
+            const formData = new FormData();
+            formData.append('file', file);
+            formData.append('to', currentChatUser);
+            formData.append('type', type);
+            appendMessage('Me', 'Uploading...', 'text', 'Now');
+            const res = await fetch('/api/upload', { method: 'POST', body: formData });
+            const data = await res.json();
+            document.getElementById('chat-area').lastChild.remove(); 
+            if (res.ok) appendMessage('Me', data.filename, type, data.timestamp);
+            else alert(data.message);
+        }
+
+        async function sendMessage() {
+            const txt = document.getElementById('msg-input');
+            if (!txt.value || !currentChatUser) return;
+            const res = await fetch('/api/send_message', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ to: currentChatUser, message: txt.value }) });
+            const data = await res.json();
+            if(res.ok) { appendMessage('Me', txt.value, 'text', data.timestamp); txt.value = ''; } 
+        }
+
+        function disableChatInput() {
+            document.getElementById('msg-input').disabled = true;
+            document.getElementById('btn-send').disabled = true;
+            document.getElementById('btn-attach').disabled = true;
+            document.getElementById('btn-voice-call').disabled = true;
+            document.getElementById('btn-video-call').disabled = true;
+        }
+        function enableChatInput() {
+            document.getElementById('msg-input').disabled = false;
+            document.getElementById('btn-send').disabled = false;
+            document.getElementById('btn-attach').disabled = false;
+            document.getElementById('btn-voice-call').disabled = false;
+            document.getElementById('btn-video-call').disabled = false;
+        }
+        async function addFriend() {
+            const name = document.getElementById('new-friend-name').value;
+            if(!name) return;
+            await fetch('/api/add_friend', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ friend: name }) });
+            document.getElementById('new-friend-name').value = '';
+            setTimeout(() => refreshFriends(false), 500);
+        }
+    </script>
+</body>
+</html>
