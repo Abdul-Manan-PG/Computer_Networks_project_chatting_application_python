@@ -17,22 +17,25 @@ class ChatServer:
         self.clients = {}  # Map username -> socket object
         print(f"Server started on {HOST}:{TCP_PORT}")
 
-    def broadcast(self, message, exclude_user=None):
-        """Send a raw text message to all connected clients."""
-        for user, client_sock in self.clients.items():
-            if user != exclude_user:
-                try:
-                    client_sock.send(message.encode('utf-8'))
-                except:
-                    pass
+    def send_json(self, sock, data):
+        """Helper to send JSON data with a newline delimiter."""
+        try:
+            # \n is crucial for the client to distinguish separate messages
+            msg = json.dumps(data) + "\n"
+            sock.send(msg.encode('utf-8'))
+        except Exception as e:
+            print(f"Send error: {e}")
 
     def broadcast_json(self, data, exclude_user=None):
         """Send a JSON object to all connected clients."""
-        msg = json.dumps(data)
+        # Prepare message once
+        msg = json.dumps(data) + "\n"
+        encoded_msg = msg.encode('utf-8')
+        
         for user, client_sock in self.clients.items():
             if user != exclude_user:
                 try:
-                    client_sock.send(msg.encode('utf-8'))
+                    client_sock.send(encoded_msg)
                 except:
                     pass
 
@@ -46,7 +49,11 @@ class ChatServer:
                 if not data:
                     break
                 
-                request = json.loads(data)
+                try:
+                    request = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
                 command = request.get('command')
                 response = {"status": "error", "message": "Unknown command"}
 
@@ -54,7 +61,7 @@ class ChatServer:
                 if command == 'REGISTER':
                     success = self.db.register_user(request['username'], request['password'])
                     response = {"status": "success", "message": "Registration successful"} if success else {"status": "error", "message": "Username taken"}
-                    client_socket.send(json.dumps(response).encode('utf-8'))
+                    self.send_json(client_socket, response)
 
                 elif command == 'LOGIN':
                     success = self.db.validate_login(request['username'], request['password'])
@@ -65,7 +72,7 @@ class ChatServer:
                         self.clients[user] = client_socket
                         
                         response = {"status": "success", "message": f"Welcome {user}!"}
-                        client_socket.send(json.dumps(response).encode('utf-8'))
+                        self.send_json(client_socket, response)
                         
                         # Notify others that I am ONLINE
                         self.broadcast_json({
@@ -75,7 +82,7 @@ class ChatServer:
                         }, exclude_user=user)
                     else:
                         response = {"status": "error", "message": "Invalid credentials"}
-                        client_socket.send(json.dumps(response).encode('utf-8'))
+                        self.send_json(client_socket, response)
 
                 # --- Logic that requires login ---
                 elif user:
@@ -92,45 +99,36 @@ class ChatServer:
                                 "timestamp": time.ctime()
                             }
                             try:
-                                self.clients[recipient].send(json.dumps(payload).encode('utf-8'))
+                                self.send_json(self.clients[recipient], payload)
                                 response = {"status": "success", "message": "Message sent"}
                             except:
                                 response = {"status": "error", "message": "Recipient disconnected"}
                         else:
                             response = {"status": "success", "message": "Message saved (User offline)"}
                         
-                        client_socket.send(json.dumps(response).encode('utf-8'))
+                        self.send_json(client_socket, response)
 
                     elif command == 'ADD_FRIEND':
                         res = self.db.add_friend(user, request['friend_name'])
-                        client_socket.send(json.dumps({"status": "info", "message": res}).encode('utf-8'))
+                        self.send_json(client_socket, {"status": "info", "message": res})
 
                     elif command == 'GET_FRIENDS':
-                        # Get basic list of strings from DB
                         friends_list = self.db.get_friends(user)
-                        
-                        # Enrich with Online/Offline status
                         enriched_friends = []
                         for f in friends_list:
                             status = "Online" if f in self.clients else "Offline"
                             enriched_friends.append({"username": f, "status": status})
 
-                        client_socket.send(json.dumps({"status": "success", "data": enriched_friends}).encode('utf-8'))
-
-                    elif command == 'GET_FRIENDS_STATUS':
-                        # Simple helper to just check specific friends
-                        friends_list = self.db.get_friends(user)
-                        status_map = {f: ("Online" if f in self.clients else "Offline") for f in friends_list}
-                        client_socket.send(json.dumps({"type": "STATUS_SYNC", "data": status_map}).encode('utf-8'))
+                        self.send_json(client_socket, {"status": "success", "data": enriched_friends})
 
                     elif command == 'GET_HISTORY':
                         friend = request['of_user']
                         history = self.db.get_chat_history(user, friend)
-                        client_socket.send(json.dumps({
+                        self.send_json(client_socket, {
                             "status": "success", 
                             "data": history,
                             "with_user": friend 
-                        }).encode('utf-8'))
+                        })
 
                     elif command == 'INIT_CALL':
                         callee = request['callee']
@@ -138,21 +136,21 @@ class ChatServer:
                         
                         if addr_info and callee in self.clients:
                             call_id = self.db.log_call(user, callee, "INITIATED")
-                            client_socket.send(json.dumps({
+                            self.send_json(client_socket, {
                                 "status": "success",
                                 "type": "CALL_INFO",
                                 "target_ip": addr_info[0],
                                 "target_port": addr_info[1],
                                 "call_id": call_id
-                            }).encode('utf-8'))
+                            })
                             
-                            self.clients[callee].send(json.dumps({
+                            self.send_json(self.clients[callee], {
                                 "type": "INCOMING_CALL",
                                 "from": user,
                                 "caller_ip": addr[0]
-                            }).encode('utf-8'))
+                            })
                         else:
-                            client_socket.send(json.dumps({"status": "error", "message": "User offline"}).encode('utf-8'))
+                            self.send_json(client_socket, {"status": "error", "message": "User offline"})
 
         except Exception as e:
             print(f"Error with {addr}: {e}")

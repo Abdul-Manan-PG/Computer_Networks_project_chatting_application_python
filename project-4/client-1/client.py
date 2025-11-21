@@ -29,8 +29,6 @@ class ChatBackend:
         
         self.db = ClientDatabase()
         self.message_queue = [] 
-        
-        # NEW: Store real-time status of friends (not saved in DB, just memory)
         self.friend_statuses = {} 
 
     def connect(self, server_ip):
@@ -52,79 +50,96 @@ class ChatBackend:
                 self.connected = False
 
     def listen_tcp(self):
+        """
+        Robust Listener: buffers data and splits by newline to handle 
+        stacked messages (e.g. "Offline" status arriving too fast).
+        """
+        buffer = ""
         while self.connected:
             try:
-                data = self.tcp_socket.recv(16384).decode('utf-8')
-                if not data: break
+                data = self.tcp_socket.recv(4096).decode('utf-8')
+                if not data:
+                    # Connection closed by server
+                    self.connected = False
+                    break
                 
-                try:
-                    msg = json.loads(data)
+                buffer += data
+                
+                # Process complete messages in the buffer
+                while "\n" in buffer:
+                    message_str, buffer = buffer.split("\n", 1)
                     
-                    # --- 1. Real-time Message ---
-                    if msg.get('type') == 'MESSAGE':
-                        sender = msg['from']
-                        if self.username:
-                            self.db.save_message(self.username, sender, sender, msg['content'], msg['timestamp'])
-                        self.message_queue.append(msg)
-                    
-                    # --- 2. Status Updates (Online/Offline) ---
-                    elif msg.get('type') == 'STATUS_UPDATE':
-                        # Update memory
-                        user_updated = msg['username']
-                        status = msg['status']
-                        self.friend_statuses[user_updated] = status
-                        # Pass to UI to update dot immediately
-                        self.message_queue.append(msg)
-
-                    # --- 3. Friend List Sync (Initial Login) ---
-                    elif msg.get('status') == 'success' and 'data' in msg:
-                        data_content = msg['data']
+                    if not message_str.strip():
+                        continue
                         
-                        # Case A: It is the Friend List with Status Objects
-                        if isinstance(data_content, list) and len(data_content) > 0 and isinstance(data_content[0], dict):
-                            if self.username:
-                                for f_obj in data_content:
-                                    name = f_obj['username']
-                                    stat = f_obj['status']
-                                    
-                                    # Save name to DB
-                                    self.db.add_friend(self.username, name)
-                                    # Save status to Memory
-                                    self.friend_statuses[name] = stat
-                                    
-                                    # Trigger History Sync
-                                    self.send_command({"command": "GET_HISTORY", "of_user": name})
-                            
-                            # Send this list to UI so it renders initially
-                            self.message_queue.append(msg)
+                    try:
+                        msg = json.loads(message_str)
+                        self.process_message(msg)
+                    except json.JSONDecodeError:
+                        print("JSON Decode Error on:", message_str)
 
-                        # Case B: It is History (List of lists/tuples)
-                        elif isinstance(data_content, list) and msg.get('with_user'):
-                            friend_name = msg['with_user']
-                            self.db.bulk_save_messages(self.username, friend_name, data_content)
-
-                    # --- 4. Call Handling ---
-                    elif msg.get('type') == 'CALL_INFO':
-                        self.target_ip = msg['target_ip']
-                        self.target_udp_port = msg['target_port']
-                        self.in_call = True
-                        self.call_status = "In Call..."
-                        threading.Thread(target=self.send_udp_audio).start()
-                        self.message_queue.append(msg)
-                    
-                    elif msg.get('type') == 'INCOMING_CALL':
-                        self.in_call = True
-                        self.call_status = f"Incoming Call from {msg['from']}!"
-                        self.message_queue.append(msg)
-                    
-                    else:
-                        self.message_queue.append(msg)
-
-                except json.JSONDecodeError:
-                    pass
             except Exception as e:
                 print(f"TCP Error: {e}")
+                self.connected = False
                 break
+
+    def process_message(self, msg):
+        """Handles a single parsed JSON message"""
+        
+        # --- 1. Real-time Message ---
+        if msg.get('type') == 'MESSAGE':
+            sender = msg['from']
+            if self.username:
+                self.db.save_message(self.username, sender, sender, msg['content'], msg['timestamp'])
+            self.message_queue.append(msg)
+        
+        # --- 2. Status Updates (Online/Offline) ---
+        elif msg.get('type') == 'STATUS_UPDATE':
+            user_updated = msg['username']
+            status = msg['status']
+            self.friend_statuses[user_updated] = status
+            self.message_queue.append(msg)
+
+        # --- 3. Friend List Sync ---
+        elif msg.get('status') == 'success' and 'data' in msg:
+            data_content = msg['data']
+            
+            # Case A: Friend List
+            if isinstance(data_content, list) and len(data_content) > 0 and isinstance(data_content[0], dict):
+                if self.username:
+                    for f_obj in data_content:
+                        name = f_obj['username']
+                        stat = f_obj['status']
+                        self.db.add_friend(self.username, name)
+                        self.friend_statuses[name] = stat
+                        self.send_command({"command": "GET_HISTORY", "of_user": name})
+                self.message_queue.append(msg)
+
+            # Case B: History
+            elif isinstance(data_content, list) and msg.get('with_user'):
+                friend_name = msg['with_user']
+                self.db.bulk_save_messages(self.username, friend_name, data_content)
+            
+            # Case C: Empty list or other
+            else:
+                self.message_queue.append(msg)
+
+        # --- 4. Call Handling ---
+        elif msg.get('type') == 'CALL_INFO':
+            self.target_ip = msg['target_ip']
+            self.target_udp_port = msg['target_port']
+            self.in_call = True
+            self.call_status = "In Call..."
+            threading.Thread(target=self.send_udp_audio).start()
+            self.message_queue.append(msg)
+        
+        elif msg.get('type') == 'INCOMING_CALL':
+            self.in_call = True
+            self.call_status = f"Incoming Call from {msg['from']}!"
+            self.message_queue.append(msg)
+        
+        else:
+            self.message_queue.append(msg)
 
     def receive_udp(self):
         while True:
@@ -175,13 +190,14 @@ def connect():
         "udp_port": backend.my_udp_port
     })
     
+    # Wait briefly for async response
     time.sleep(0.5)
+    
     for msg in backend.message_queue:
         if msg.get('status') == 'success':
              if action == 'login':
                  backend.username = username
                  session['user'] = username
-                 # Trigger initial sync
                  backend.send_command({"command": "GET_FRIENDS"})
                  return redirect(url_for('dashboard'))
              else:
@@ -210,23 +226,17 @@ def send_message():
 def add_friend():
     friend = request.json['friend']
     backend.send_command({"command": "ADD_FRIEND", "friend_name": friend})
-    # Add to DB and assume offline until server says otherwise
     backend.db.add_friend(backend.username, friend)
     backend.friend_statuses[friend] = "Offline"
     return jsonify({"status": "ok"})
 
 @app.route('/api/get_friends')
 def get_friends():
-    # 1. Get list from DB
     db_friends = backend.db.get_friends(backend.username)
-    
-    # 2. Merge with Live Status from Memory
     response_list = []
     for f in db_friends:
-        # Default to Offline if we haven't heard anything
         stat = backend.friend_statuses.get(f, "Offline")
         response_list.append({"username": f, "status": stat})
-        
     return jsonify({"status": "success", "data": response_list})
 
 @app.route('/api/history/<friend_name>')
