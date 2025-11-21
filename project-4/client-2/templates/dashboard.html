@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Chat Dashboard</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+        body { margin: 0; font-family: sans-serif; display: flex; height: 100vh; }
+        #sidebar { width: 250px; background: #2c3e50; color: white; padding: 20px; display: flex; flex-direction: column; }
+        #main { flex: 1; display: flex; flex-direction: column; background: #ecf0f1; }
+        #chat-area { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+        #input-area { padding: 20px; background: white; display: flex; gap: 10px; }
+        
+        .message { padding: 10px; background: white; border-radius: 8px; max-width: 70%; }
+        .message.me { background: #3498db; color: white; align-self: flex-end; }
+        .message.other { background: white; align-self: flex-start; }
+        
+        input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
+        button { padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; }
+        
+        .friend-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #34495e; display: flex; justify-content: space-between; align-items: center;}
+        .friend-item:hover { background: #34495e; }
+        .friend-item.active { background: #1abc9c; }
+        
+        #call-status { background: #e74c3c; color: white; padding: 5px; text-align: center; font-size: 0.8em; display: none; }
+
+        /* Status Dots */
+        .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #95a5a6; display: inline-block; }
+        .status-dot.online { background: #2ecc71; box-shadow: 0 0 5px #2ecc71; }
+        .status-dot.offline { background: #95a5a6; }
+    </style>
+</head>
+<body>
+
+    <!-- Sidebar -->
+    <div id="sidebar">
+        <h3>{{ username }}</h3>
+        <div id="call-status">Idle</div>
+        
+        <div style="margin-top: 20px;">
+            <input type="text" id="new-friend-name" placeholder="Add friend..." style="width: 100%; box-sizing: border-box;">
+            <button onclick="addFriend()" style="width: 100%; margin-top: 5px; background: #27ae60;">Add</button>
+        </div>
+
+        <h4 style="margin-top: 30px;">Friends</h4>
+        <button onclick="refreshFriends()" style="background: #7f8c8d; font-size: 0.8em;">Refresh List</button>
+        <div id="friends-list" style="margin-top: 10px;"></div>
+    </div>
+
+    <!-- Main Chat -->
+    <div id="main">
+        <div style="padding: 15px; background: white; border-bottom: 1px solid #ddd; display:flex; justify-content: space-between; align-items: center;">
+            <span id="chat-title">Select a friend to chat</span>
+            <button onclick="startCall()" style="background: #e67e22;" id="btn-call" disabled>Call (UDP)</button>
+        </div>
+        
+        <div id="chat-area"></div>
+
+        <div id="input-area">
+            <input type="text" id="msg-input" placeholder="Type a message..." style="flex: 1;" disabled>
+            <button onclick="sendMessage()" id="btn-send" disabled>Send</button>
+        </div>
+    </div>
+
+    <script>
+        let currentChatUser = null;
+        const username = "{{ username }}";
+
+        window.onload = refreshFriends;
+
+        // --- Polling ---
+        setInterval(fetchUpdates, 1000);
+
+        async function fetchUpdates() {
+            const res = await fetch('/api/updates');
+            const data = await res.json();
+
+            if(data.call_status !== "Idle") {
+                const el = document.getElementById('call-status');
+                el.style.display = 'block';
+                el.innerText = data.call_status;
+            }
+
+            data.messages.forEach(msg => {
+                // Case 1: Friend List (Initial Sync)
+                if (msg.status === 'success' && Array.isArray(msg.data) && msg.data.length > 0 && msg.data[0].username) {
+                    renderFriends(msg.data);
+                }
+                // Case 2: Real-time Status Update (Someone came online/offline)
+                else if (msg.type === 'STATUS_UPDATE') {
+                    // We refresh the whole friend list to reflect the status change
+                    refreshFriends();
+                }
+                // Case 3: Chat Message
+                else if (msg.type === 'MESSAGE') {
+                    if (msg.from === currentChatUser) {
+                        appendMessage(msg.from, msg.content, msg.timestamp);
+                    }
+                }
+            });
+        }
+
+        // --- Actions ---
+
+        async function selectFriend(name) {
+            currentChatUser = name;
+            document.getElementById('chat-title').innerText = "Chat with " + name;
+            document.getElementById('msg-input').disabled = false;
+            document.getElementById('btn-send').disabled = false;
+            document.getElementById('btn-call').disabled = false;
+            
+            // Highlight UI
+            document.querySelectorAll('.friend-item').forEach(el => el.classList.remove('active'));
+            // Note: we search by text content but the div now has a span child. 
+            // It's safer to search by ID or loop and check children.
+            const items = document.querySelectorAll('.friend-item');
+            items.forEach(el => {
+                if (el.getAttribute('data-name') === name) el.classList.add('active');
+            });
+
+            // Load History
+            const area = document.getElementById('chat-area');
+            area.innerHTML = 'Loading history...';
+            
+            try {
+                const res = await fetch(`/api/history/${name}`);
+                const history = await res.json();
+                
+                area.innerHTML = '';
+                if(history.length === 0) {
+                    area.innerHTML = '<div style="text-align:center; color:#aaa; margin-top:20px">No history yet. Say Hi!</div>';
+                }
+                
+                history.forEach(msg => {
+                    let senderDisplay = (msg.from === username) ? 'Me' : msg.from;
+                    appendMessage(senderDisplay, msg.content, msg.timestamp);
+                });
+            } catch(e) {
+                area.innerHTML = 'Error loading history.';
+            }
+        }
+
+        async function sendMessage() {
+            const txt = document.getElementById('msg-input');
+            if (!txt.value || !currentChatUser) return;
+
+            const res = await fetch('/api/send_message', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ to: currentChatUser, message: txt.value })
+            });
+            const data = await res.json();
+            
+            appendMessage('Me', txt.value, data.timestamp);
+            txt.value = '';
+        }
+
+        async function addFriend() {
+            const name = document.getElementById('new-friend-name').value;
+            if(!name) return;
+            
+            await fetch('/api/add_friend', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ friend: name })
+            });
+            document.getElementById('new-friend-name').value = '';
+            setTimeout(refreshFriends, 500);
+        }
+
+        async function refreshFriends() {
+            const res = await fetch('/api/get_friends');
+            const json = await res.json();
+            if(json.data) renderFriends(json.data);
+        }
+
+        async function startCall() {
+            if(!currentChatUser) return;
+            await fetch('/api/call_user', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ target: currentChatUser })
+            });
+        }
+
+        // --- UI Helpers ---
+
+        function renderFriends(list) {
+            const container = document.getElementById('friends-list');
+            container.innerHTML = '';
+            list.forEach(obj => {
+                const name = obj.username;
+                const status = obj.status.toLowerCase(); // 'online' or 'offline'
+                
+                const div = document.createElement('div');
+                div.className = 'friend-item';
+                div.setAttribute('data-name', name);
+                if(name === currentChatUser) div.classList.add('active');
+                
+                // Name + Status Dot
+                div.innerHTML = `
+                    <span>${name}</span>
+                    <span class="status-dot ${status}" title="${status}"></span>
+                `;
+                
+                div.onclick = () => selectFriend(name);
+                container.appendChild(div);
+            });
+        }
+
+        function appendMessage(sender, text, time) {
+            const div = document.createElement('div');
+            div.className = `message ${sender === 'Me' ? 'me' : 'other'}`;
+            div.innerHTML = `<strong>${sender}</strong>: ${text} <br><small style="font-size:0.7em; opacity:0.7">${time}</small>`;
+            const area = document.getElementById('chat-area');
+            area.appendChild(div);
+            area.scrollTop = area.scrollHeight;
+        }
+    </script>
+</body>
+</html>
