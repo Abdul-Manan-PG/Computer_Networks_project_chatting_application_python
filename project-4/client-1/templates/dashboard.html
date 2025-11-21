@@ -16,17 +16,21 @@
         
         input { padding: 10px; border: 1px solid #ddd; border-radius: 4px; }
         button { padding: 10px 20px; background: #3498db; color: white; border: none; border-radius: 4px; cursor: pointer; }
-        
+        button:disabled { background: #95a5a6; cursor: not-allowed; }
+
         .friend-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #34495e; display: flex; justify-content: space-between; align-items: center;}
         .friend-item:hover { background: #34495e; }
         .friend-item.active { background: #1abc9c; }
         
         #call-status { background: #e74c3c; color: white; padding: 5px; text-align: center; font-size: 0.8em; display: none; }
+        #connection-warning { background: #c0392b; color: white; padding: 5px; text-align: center; font-size: 0.8em; display: none; }
 
         /* Status Dots */
         .status-dot { width: 10px; height: 10px; border-radius: 50%; background: #95a5a6; display: inline-block; }
         .status-dot.online { background: #2ecc71; box-shadow: 0 0 5px #2ecc71; }
         .status-dot.offline { background: #95a5a6; }
+        
+        .logout-btn { background: #c0392b; margin-top: auto; width: 100%; }
     </style>
 </head>
 <body>
@@ -34,6 +38,7 @@
     <!-- Sidebar -->
     <div id="sidebar">
         <h3>{{ username }}</h3>
+        <div id="connection-warning">Disconnected</div>
         <div id="call-status">Idle</div>
         
         <div style="margin-top: 20px;">
@@ -42,8 +47,10 @@
         </div>
 
         <h4 style="margin-top: 30px;">Friends</h4>
-        <button onclick="refreshFriends()" style="background: #7f8c8d; font-size: 0.8em;">Refresh List</button>
+        <button id="refresh-btn" onclick="refreshFriends()" style="background: #7f8c8d; font-size: 0.8em;">Refresh List</button>
         <div id="friends-list" style="margin-top: 10px;"></div>
+
+        <a href="/logout"><button class="logout-btn">Logout</button></a>
     </div>
 
     <!-- Main Chat -->
@@ -63,79 +70,81 @@
 
     <script>
         let currentChatUser = null;
+        let friendStatuses = {};
         const username = "{{ username }}";
 
         window.onload = refreshFriends;
 
-        // --- Polling ---
         setInterval(fetchUpdates, 1000);
 
         async function fetchUpdates() {
-            const res = await fetch('/api/updates');
-            const data = await res.json();
+            try {
+                const res = await fetch('/api/updates');
+                const data = await res.json();
 
-            if(data.call_status !== "Idle") {
-                const el = document.getElementById('call-status');
-                el.style.display = 'block';
-                el.innerText = data.call_status;
-            }
+                // 1. Connection Status
+                const warn = document.getElementById('connection-warning');
+                if (data.connected === false) {
+                    warn.style.display = 'block';
+                } else {
+                    warn.style.display = 'none';
+                }
 
-            data.messages.forEach(msg => {
-                // Case 1: Friend List (Initial Sync)
-                if (msg.status === 'success' && Array.isArray(msg.data) && msg.data.length > 0 && msg.data[0].username) {
-                    renderFriends(msg.data);
+                // 2. Call Status
+                if(data.call_status !== "Idle") {
+                    const el = document.getElementById('call-status');
+                    el.style.display = 'block';
+                    el.innerText = data.call_status;
                 }
-                // Case 2: Real-time Status Update (Someone came online/offline)
-                else if (msg.type === 'STATUS_UPDATE') {
-                    // We refresh the whole friend list to reflect the status change
-                    refreshFriends();
-                }
-                // Case 3: Chat Message
-                else if (msg.type === 'MESSAGE') {
-                    if (msg.from === currentChatUser) {
-                        appendMessage(msg.from, msg.content, msg.timestamp);
+
+                // 3. Process Messages
+                data.messages.forEach(msg => {
+                    // Updated Friend List
+                    if (msg.status === 'success' && Array.isArray(msg.data) && (msg.data.length === 0 || msg.data[0].username)) {
+                        renderFriends(msg.data);
                     }
-                }
-            });
+                    // Status Change
+                    else if (msg.type === 'STATUS_UPDATE') {
+                        // Just trigger a refresh to be safe, or update local cache directly
+                        refreshFriends(true); // true = silent refresh
+                        
+                        if(msg.username === currentChatUser) {
+                            if(msg.status === 'Offline') {
+                                disableChatInput();
+                                alert(msg.username + " went Offline.");
+                            } else {
+                                enableChatInput();
+                            }
+                        }
+                    }
+                    // Incoming Message
+                    else if (msg.type === 'MESSAGE') {
+                        if (msg.from === currentChatUser) {
+                            appendMessage(msg.from, msg.content, msg.timestamp);
+                        }
+                    }
+                    // Errors
+                    else if (msg.status === 'error') {
+                        alert("Error: " + msg.message);
+                    }
+                });
+            } catch (e) {
+                console.log("Polling error:", e);
+            }
         }
 
-        // --- Actions ---
-
-        async function selectFriend(name) {
-            currentChatUser = name;
-            document.getElementById('chat-title').innerText = "Chat with " + name;
-            document.getElementById('msg-input').disabled = false;
-            document.getElementById('btn-send').disabled = false;
-            document.getElementById('btn-call').disabled = false;
-            
-            // Highlight UI
-            document.querySelectorAll('.friend-item').forEach(el => el.classList.remove('active'));
-            // Note: we search by text content but the div now has a span child. 
-            // It's safer to search by ID or loop and check children.
-            const items = document.querySelectorAll('.friend-item');
-            items.forEach(el => {
-                if (el.getAttribute('data-name') === name) el.classList.add('active');
-            });
-
-            // Load History
-            const area = document.getElementById('chat-area');
-            area.innerHTML = 'Loading history...';
+        async function refreshFriends(silent=false) {
+            const btn = document.getElementById('refresh-btn');
+            if(!silent) btn.innerText = "Refreshing...";
             
             try {
-                const res = await fetch(`/api/history/${name}`);
-                const history = await res.json();
-                
-                area.innerHTML = '';
-                if(history.length === 0) {
-                    area.innerHTML = '<div style="text-align:center; color:#aaa; margin-top:20px">No history yet. Say Hi!</div>';
-                }
-                
-                history.forEach(msg => {
-                    let senderDisplay = (msg.from === username) ? 'Me' : msg.from;
-                    appendMessage(senderDisplay, msg.content, msg.timestamp);
-                });
+                const res = await fetch('/api/get_friends');
+                const json = await res.json();
+                if(json.data) renderFriends(json.data);
             } catch(e) {
-                area.innerHTML = 'Error loading history.';
+                console.log("Refresh failed");
+            } finally {
+                if(!silent) btn.innerText = "Refresh List";
             }
         }
 
@@ -143,34 +152,80 @@
             const txt = document.getElementById('msg-input');
             if (!txt.value || !currentChatUser) return;
 
+            // Optimistic UI update is risky if connection is dead, 
+            // but we rely on the API response to confirm.
+            
             const res = await fetch('/api/send_message', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ to: currentChatUser, message: txt.value })
             });
+            
             const data = await res.json();
             
-            appendMessage('Me', txt.value, data.timestamp);
-            txt.value = '';
+            if(res.ok) {
+                appendMessage('Me', txt.value, data.timestamp);
+                txt.value = '';
+            } else {
+                alert(data.message);
+            }
+        }
+
+        // --- Standard Helper Functions ---
+        async function selectFriend(name, status) {
+            currentChatUser = name;
+            document.getElementById('chat-title').innerText = "Chat with " + name;
+            
+            if (status === 'Offline') disableChatInput();
+            else enableChatInput();
+
+            document.querySelectorAll('.friend-item').forEach(el => el.classList.remove('active'));
+            document.querySelectorAll(`[data-name="${name}"]`).forEach(el => el.classList.add('active'));
+
+            const area = document.getElementById('chat-area');
+            area.innerHTML = 'Loading history...';
+            
+            try {
+                const res = await fetch(`/api/history/${name}`);
+                const history = await res.json();
+                area.innerHTML = '';
+                if(history.length === 0) area.innerHTML = '<div style="text-align:center; color:#aaa; margin-top:20px">No history yet.</div>';
+                
+                history.forEach(msg => {
+                    let senderDisplay = (msg.from === username) ? 'Me' : msg.from;
+                    appendMessage(senderDisplay, msg.content, msg.timestamp);
+                });
+            } catch(e) { area.innerHTML = 'Error loading history.'; }
+        }
+
+        function disableChatInput() {
+            const inp = document.getElementById('msg-input');
+            const btn = document.getElementById('btn-send');
+            inp.disabled = true;
+            inp.placeholder = "User is Offline";
+            btn.disabled = true;
+            document.getElementById('btn-call').disabled = true;
+        }
+
+        function enableChatInput() {
+            const inp = document.getElementById('msg-input');
+            const btn = document.getElementById('btn-send');
+            inp.disabled = false;
+            inp.placeholder = "Type a message...";
+            btn.disabled = false;
+            document.getElementById('btn-call').disabled = false;
         }
 
         async function addFriend() {
             const name = document.getElementById('new-friend-name').value;
             if(!name) return;
-            
             await fetch('/api/add_friend', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ friend: name })
             });
             document.getElementById('new-friend-name').value = '';
-            setTimeout(refreshFriends, 500);
-        }
-
-        async function refreshFriends() {
-            const res = await fetch('/api/get_friends');
-            const json = await res.json();
-            if(json.data) renderFriends(json.data);
+            setTimeout(() => refreshFriends(false), 500);
         }
 
         async function startCall() {
@@ -182,27 +237,25 @@
             });
         }
 
-        // --- UI Helpers ---
-
         function renderFriends(list) {
             const container = document.getElementById('friends-list');
             container.innerHTML = '';
             list.forEach(obj => {
                 const name = obj.username;
-                const status = obj.status.toLowerCase(); // 'online' or 'offline'
-                
+                const status = obj.status; 
+                friendStatuses[name] = status;
+
                 const div = document.createElement('div');
                 div.className = 'friend-item';
                 div.setAttribute('data-name', name);
-                if(name === currentChatUser) div.classList.add('active');
+                if(name === currentChatUser) {
+                    div.classList.add('active');
+                    if(status === 'Offline') disableChatInput();
+                    else enableChatInput();
+                }
                 
-                // Name + Status Dot
-                div.innerHTML = `
-                    <span>${name}</span>
-                    <span class="status-dot ${status}" title="${status}"></span>
-                `;
-                
-                div.onclick = () => selectFriend(name);
+                div.innerHTML = `<span>${name}</span><span class="status-dot ${status.toLowerCase()}" title="${status}"></span>`;
+                div.onclick = () => selectFriend(name, status);
                 container.appendChild(div);
             });
         }

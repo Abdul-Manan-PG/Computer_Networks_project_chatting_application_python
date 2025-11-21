@@ -14,6 +14,11 @@ UDP_PORT = 0
 
 class ChatBackend:
     def __init__(self):
+        self.reset_state()
+        self.db = ClientDatabase()
+        self.message_queue = [] 
+        
+    def reset_state(self):
         self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.bind(('0.0.0.0', UDP_PORT))
@@ -21,18 +26,18 @@ class ChatBackend:
         
         self.connected = False
         self.username = None
-        
+        self.friend_statuses = {} 
         self.target_ip = None
         self.target_udp_port = None
         self.in_call = False
         self.call_status = "Idle"
-        
-        self.db = ClientDatabase()
-        self.message_queue = [] 
-        self.friend_statuses = {} 
 
     def connect(self, server_ip):
         try:
+            # Re-create socket if it was closed
+            if self.tcp_socket.fileno() == -1:
+                self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
             self.tcp_socket.connect((server_ip, TCP_PORT))
             self.connected = True
             threading.Thread(target=self.listen_tcp, daemon=True).start()
@@ -41,42 +46,49 @@ class ChatBackend:
         except Exception as e:
             print(f"Connection Error: {e}")
             return False
+    
+    def disconnect(self):
+        if self.connected:
+            try:
+                self.send_command({"command": "LOGOUT"})
+                time.sleep(0.2)
+                self.tcp_socket.close()
+            except:
+                pass
+        self.reset_state()
 
     def send_command(self, data):
         if self.connected:
             try:
-                self.tcp_socket.send(json.dumps(data).encode('utf-8'))
-            except:
+                msg = json.dumps(data) + "\n"
+                self.tcp_socket.send(msg.encode('utf-8'))
+                return True
+            except Exception as e:
+                print(f"Send Failed: {e}")
                 self.connected = False
+                return False
+        return False
 
     def listen_tcp(self):
-        """
-        Robust Listener: buffers data and splits by newline to handle 
-        stacked messages (e.g. "Offline" status arriving too fast).
-        """
         buffer = ""
         while self.connected:
             try:
                 data = self.tcp_socket.recv(4096).decode('utf-8')
                 if not data:
-                    # Connection closed by server
                     self.connected = False
                     break
                 
                 buffer += data
                 
-                # Process complete messages in the buffer
                 while "\n" in buffer:
                     message_str, buffer = buffer.split("\n", 1)
-                    
-                    if not message_str.strip():
-                        continue
+                    if not message_str.strip(): continue
                         
                     try:
                         msg = json.loads(message_str)
                         self.process_message(msg)
                     except json.JSONDecodeError:
-                        print("JSON Decode Error on:", message_str)
+                        print("JSON Decode Error")
 
             except Exception as e:
                 print(f"TCP Error: {e}")
@@ -84,47 +96,51 @@ class ChatBackend:
                 break
 
     def process_message(self, msg):
-        """Handles a single parsed JSON message"""
-        
-        # --- 1. Real-time Message ---
+        # 1. Real-time Message
         if msg.get('type') == 'MESSAGE':
             sender = msg['from']
             if self.username:
                 self.db.save_message(self.username, sender, sender, msg['content'], msg['timestamp'])
             self.message_queue.append(msg)
         
-        # --- 2. Status Updates (Online/Offline) ---
+        # 2. Status Updates
         elif msg.get('type') == 'STATUS_UPDATE':
             user_updated = msg['username']
             status = msg['status']
             self.friend_statuses[user_updated] = status
             self.message_queue.append(msg)
 
-        # --- 3. Friend List Sync ---
+        # 3. Friend List Sync (Response to GET_FRIENDS)
         elif msg.get('status') == 'success' and 'data' in msg:
             data_content = msg['data']
             
-            # Case A: Friend List
-            if isinstance(data_content, list) and len(data_content) > 0 and isinstance(data_content[0], dict):
+            # Case A: Friend List with Statuses
+            if isinstance(data_content, list) and (len(data_content) == 0 or isinstance(data_content[0], dict)):
                 if self.username:
                     for f_obj in data_content:
                         name = f_obj['username']
                         stat = f_obj['status']
+                        # Update DB and Memory
                         self.db.add_friend(self.username, name)
                         self.friend_statuses[name] = stat
+                        # Auto-fetch history
                         self.send_command({"command": "GET_HISTORY", "of_user": name})
+                
+                # Push to queue so UI updates
                 self.message_queue.append(msg)
 
-            # Case B: History
+            # Case B: History Data
             elif isinstance(data_content, list) and msg.get('with_user'):
                 friend_name = msg['with_user']
                 self.db.bulk_save_messages(self.username, friend_name, data_content)
-            
-            # Case C: Empty list or other
             else:
                 self.message_queue.append(msg)
+        
+        # 4. Error handling
+        elif msg.get('status') == 'error':
+             self.message_queue.append(msg)
 
-        # --- 4. Call Handling ---
+        # 5. Call Handling
         elif msg.get('type') == 'CALL_INFO':
             self.target_ip = msg['target_ip']
             self.target_udp_port = msg['target_port']
@@ -132,12 +148,10 @@ class ChatBackend:
             self.call_status = "In Call..."
             threading.Thread(target=self.send_udp_audio).start()
             self.message_queue.append(msg)
-        
         elif msg.get('type') == 'INCOMING_CALL':
             self.in_call = True
             self.call_status = f"Incoming Call from {msg['from']}!"
             self.message_queue.append(msg)
-        
         else:
             self.message_queue.append(msg)
 
@@ -180,7 +194,7 @@ def connect():
 
     if not backend.connected:
         if not backend.connect(server_ip):
-            return "Could not connect", 400
+            return "Could not connect to Server. Is it running?", 400
 
     cmd = "REGISTER" if action == "register" else "LOGIN"
     backend.send_command({
@@ -190,53 +204,96 @@ def connect():
         "udp_port": backend.my_udp_port
     })
     
-    # Wait briefly for async response
-    time.sleep(0.5)
-    
-    for msg in backend.message_queue:
-        if msg.get('status') == 'success':
-             if action == 'login':
-                 backend.username = username
-                 session['user'] = username
-                 backend.send_command({"command": "GET_FRIENDS"})
-                 return redirect(url_for('dashboard'))
-             else:
-                 return "Registered. Go back and Login."
-        elif msg.get('status') == 'error':
-            return f"Error: {msg.get('message')}"
+    # Wait for response
+    for _ in range(20):
+        time.sleep(0.1)
+        found_msg = None
+        for i, msg in enumerate(backend.message_queue):
+            if msg.get('status') in ['success', 'error'] and 'message' in msg:
+                found_msg = msg
+                backend.message_queue.pop(i)
+                break
+        
+        if found_msg:
+            if found_msg['status'] == 'success':
+                if action == 'login':
+                    backend.username = username
+                    session['user'] = username
+                    # Initial Fetch
+                    backend.send_command({"command": "GET_FRIENDS"})
+                    return redirect(url_for('dashboard'))
+                else:
+                    return f"<h2>Registration Successful!</h2><p>User '{username}' created.</p><a href='/'>Go to Login</a>"
+            else:
+                return f"<h2>Error</h2><p>{found_msg['message']}</p><a href='/'>Try Again</a>"
 
-    return redirect(url_for('dashboard'))
+    return "Server took too long to respond. <a href='/'>Try Again</a>"
+
+@app.route('/logout')
+def logout():
+    backend.disconnect()
+    session.clear()
+    return redirect(url_for('index'))
 
 @app.route('/dashboard')
 def dashboard():
     if not backend.username: return redirect(url_for('index'))
     return render_template('dashboard.html', username=backend.username)
 
-# --- API ---
-
 @app.route('/api/send_message', methods=['POST'])
 def send_message():
-    data = request.json
-    backend.send_command({"command": "SEND_MSG", "to": data['to'], "message": data['message']})
-    t = time.strftime("%H:%M:%S")
-    backend.db.save_message(backend.username, data['to'], backend.username, data['message'], t)
-    return jsonify({"status": "ok", "timestamp": t})
+    try:
+        data = request.json
+        to_user = data['to']
+        message = data['message']
+
+        if not backend.connected:
+             return jsonify({"status": "error", "message": "Disconnected from server."}), 503
+
+        # 1. Local Strict Check
+        status = backend.friend_statuses.get(to_user, "Offline")
+        if status == "Offline":
+            return jsonify({"status": "error", "message": "User is Offline. Cannot send message."}), 400
+
+        # 2. Send
+        success = backend.send_command({"command": "SEND_MSG", "to": to_user, "message": message})
+        if not success:
+             return jsonify({"status": "error", "message": "Failed to send command to server."}), 500
+
+        # 3. Optimistic Save (UI feedback)
+        t = time.strftime("%H:%M:%S")
+        backend.db.save_message(backend.username, to_user, backend.username, message, t)
+        
+        return jsonify({"status": "ok", "timestamp": t})
+    except Exception as e:
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @app.route('/api/add_friend', methods=['POST'])
 def add_friend():
     friend = request.json['friend']
     backend.send_command({"command": "ADD_FRIEND", "friend_name": friend})
+    backend.send_command({"command": "CHECK_STATUS", "target": friend})
     backend.db.add_friend(backend.username, friend)
     backend.friend_statuses[friend] = "Offline"
     return jsonify({"status": "ok"})
 
 @app.route('/api/get_friends')
 def get_friends():
+    """
+    Called when 'Refresh' is clicked.
+    1. Sends request to server to get FRESH statuses.
+    2. Returns current local state immediately (UI will update again when server responds).
+    """
+    if backend.connected:
+        backend.send_command({"command": "GET_FRIENDS"})
+    
+    # Return what we currently have
     db_friends = backend.db.get_friends(backend.username)
     response_list = []
     for f in db_friends:
         stat = backend.friend_statuses.get(f, "Offline")
         response_list.append({"username": f, "status": stat})
+        
     return jsonify({"status": "success", "data": response_list})
 
 @app.route('/api/history/<friend_name>')
@@ -255,7 +312,7 @@ def call_user():
 def updates():
     data = list(backend.message_queue)
     backend.message_queue.clear()
-    return jsonify({"messages": data, "call_status": backend.call_status})
+    return jsonify({"messages": data, "call_status": backend.call_status, "connected": backend.connected})
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5001, debug=True, threaded=True)

@@ -20,7 +20,6 @@ class ChatServer:
     def send_json(self, sock, data):
         """Helper to send JSON data with a newline delimiter."""
         try:
-            # \n is crucial for the client to distinguish separate messages
             msg = json.dumps(data) + "\n"
             sock.send(msg.encode('utf-8'))
         except Exception as e:
@@ -28,7 +27,6 @@ class ChatServer:
 
     def broadcast_json(self, data, exclude_user=None):
         """Send a JSON object to all connected clients."""
-        # Prepare message once
         msg = json.dumps(data) + "\n"
         encoded_msg = msg.encode('utf-8')
         
@@ -42,6 +40,7 @@ class ChatServer:
     def handle_client(self, client_socket, addr):
         print(f"New connection from {addr}")
         user = None
+        buffer = ""
         
         try:
             while True:
@@ -49,115 +48,148 @@ class ChatServer:
                 if not data:
                     break
                 
-                try:
-                    request = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
+                buffer += data
+                
+                while "\n" in buffer:
+                    message_str, buffer = buffer.split("\n", 1)
+                    if not message_str.strip():
+                        continue
 
-                command = request.get('command')
-                response = {"status": "error", "message": "Unknown command"}
+                    try:
+                        request = json.loads(message_str)
+                    except json.JSONDecodeError:
+                        continue
 
-                # --- Auth Handling ---
-                if command == 'REGISTER':
-                    success = self.db.register_user(request['username'], request['password'])
-                    response = {"status": "success", "message": "Registration successful"} if success else {"status": "error", "message": "Username taken"}
-                    self.send_json(client_socket, response)
-
-                elif command == 'LOGIN':
-                    success = self.db.validate_login(request['username'], request['password'])
-                    if success:
-                        user = request['username']
-                        udp_port = request.get('udp_port', 0)
-                        self.db.update_user_address(user, addr[0], udp_port)
-                        self.clients[user] = client_socket
-                        
-                        response = {"status": "success", "message": f"Welcome {user}!"}
-                        self.send_json(client_socket, response)
-                        
-                        # Notify others that I am ONLINE
-                        self.broadcast_json({
-                            "type": "STATUS_UPDATE", 
-                            "username": user, 
-                            "status": "Online"
-                        }, exclude_user=user)
-                    else:
-                        response = {"status": "error", "message": "Invalid credentials"}
+                    command = request.get('command')
+                    
+                    # --- Auth Handling ---
+                    if command == 'REGISTER':
+                        success = self.db.register_user(request['username'], request['password'])
+                        response = {"status": "success", "message": "Registration successful"} if success else {"status": "error", "message": "Username taken"}
                         self.send_json(client_socket, response)
 
-                # --- Logic that requires login ---
-                elif user:
-                    if command == 'SEND_MSG':
-                        recipient = request['to']
-                        msg = request['message']
-                        self.db.save_message(user, recipient, msg)
-
-                        if recipient in self.clients:
-                            payload = {
-                                "type": "MESSAGE",
-                                "from": user,
-                                "content": msg,
-                                "timestamp": time.ctime()
-                            }
-                            try:
-                                self.send_json(self.clients[recipient], payload)
-                                response = {"status": "success", "message": "Message sent"}
-                            except:
-                                response = {"status": "error", "message": "Recipient disconnected"}
+                    elif command == 'LOGIN':
+                        success = self.db.validate_login(request['username'], request['password'])
+                        if success:
+                            user = request['username']
+                            udp_port = request.get('udp_port', 0)
+                            self.db.update_user_address(user, addr[0], udp_port)
+                            self.clients[user] = client_socket
+                            
+                            self.send_json(client_socket, {"status": "success", "message": f"Welcome {user}!"})
+                            
+                            # Notify others I am ONLINE
+                            self.broadcast_json({
+                                "type": "STATUS_UPDATE", 
+                                "username": user, 
+                                "status": "Online"
+                            }, exclude_user=user)
                         else:
-                            response = {"status": "success", "message": "Message saved (User offline)"}
-                        
-                        self.send_json(client_socket, response)
+                            self.send_json(client_socket, {"status": "error", "message": "Invalid credentials"})
 
-                    elif command == 'ADD_FRIEND':
-                        res = self.db.add_friend(user, request['friend_name'])
-                        self.send_json(client_socket, {"status": "info", "message": res})
-
-                    elif command == 'GET_FRIENDS':
-                        friends_list = self.db.get_friends(user)
-                        enriched_friends = []
-                        for f in friends_list:
-                            status = "Online" if f in self.clients else "Offline"
-                            enriched_friends.append({"username": f, "status": status})
-
-                        self.send_json(client_socket, {"status": "success", "data": enriched_friends})
-
-                    elif command == 'GET_HISTORY':
-                        friend = request['of_user']
-                        history = self.db.get_chat_history(user, friend)
-                        self.send_json(client_socket, {
-                            "status": "success", 
-                            "data": history,
-                            "with_user": friend 
-                        })
-
-                    elif command == 'INIT_CALL':
-                        callee = request['callee']
-                        addr_info = self.db.get_user_address(callee)
-                        
-                        if addr_info and callee in self.clients:
-                            call_id = self.db.log_call(user, callee, "INITIATED")
-                            self.send_json(client_socket, {
-                                "status": "success",
-                                "type": "CALL_INFO",
-                                "target_ip": addr_info[0],
-                                "target_port": addr_info[1],
-                                "call_id": call_id
+                    # --- Logic that requires login ---
+                    elif user:
+                        if command == 'LOGOUT':
+                            # 1. Remove user immediately
+                            if user in self.clients:
+                                del self.clients[user]
+                            
+                            # 2. Notify others I am OFFLINE
+                            self.broadcast_json({
+                                "type": "STATUS_UPDATE", 
+                                "username": user, 
+                                "status": "Offline"
                             })
                             
-                            self.send_json(self.clients[callee], {
-                                "type": "INCOMING_CALL",
-                                "from": user,
-                                "caller_ip": addr[0]
+                            # 3. Confirm logout to client
+                            self.send_json(client_socket, {"status": "success", "message": "Logged out"})
+                            
+                            # 4. Close connection loop
+                            return 
+
+                        elif command == 'SEND_MSG':
+                            recipient = request['to']
+                            msg = request['message']
+
+                            # STRICT RULE: Cannot send to offline user
+                            if recipient in self.clients:
+                                # User is Online - Save and Send
+                                self.db.save_message(user, recipient, msg)
+                                
+                                payload = {
+                                    "type": "MESSAGE",
+                                    "from": user,
+                                    "content": msg,
+                                    "timestamp": time.ctime()
+                                }
+                                try:
+                                    self.send_json(self.clients[recipient], payload)
+                                    self.send_json(client_socket, {"status": "success", "message": "Message sent"})
+                                except:
+                                    self.send_json(client_socket, {"status": "error", "message": "Recipient connection failed"})
+                            else:
+                                # User is Offline - REJECT message
+                                self.send_json(client_socket, {"status": "error", "message": "User is Offline. Cannot send message."})
+
+                        elif command == 'ADD_FRIEND':
+                            res = self.db.add_friend(user, request['friend_name'])
+                            self.send_json(client_socket, {"status": "info", "message": res})
+
+                        elif command == 'GET_FRIENDS':
+                            friends_list = self.db.get_friends(user)
+                            enriched_friends = []
+                            for f in friends_list:
+                                status = "Online" if f in self.clients else "Offline"
+                                enriched_friends.append({"username": f, "status": status})
+
+                            self.send_json(client_socket, {"status": "success", "data": enriched_friends})
+                        
+                        elif command == 'CHECK_STATUS':
+                            # Allow client to explicitly ask for a status
+                            target = request['target']
+                            status = "Online" if target in self.clients else "Offline"
+                            self.send_json(client_socket, {
+                                "type": "STATUS_UPDATE",
+                                "username": target,
+                                "status": status
                             })
-                        else:
-                            self.send_json(client_socket, {"status": "error", "message": "User offline"})
+
+                        elif command == 'GET_HISTORY':
+                            friend = request['of_user']
+                            history = self.db.get_chat_history(user, friend)
+                            self.send_json(client_socket, {
+                                "status": "success", 
+                                "data": history,
+                                "with_user": friend 
+                            })
+
+                        elif command == 'INIT_CALL':
+                            callee = request['callee']
+                            addr_info = self.db.get_user_address(callee)
+                            
+                            if addr_info and callee in self.clients:
+                                call_id = self.db.log_call(user, callee, "INITIATED")
+                                self.send_json(client_socket, {
+                                    "status": "success",
+                                    "type": "CALL_INFO",
+                                    "target_ip": addr_info[0],
+                                    "target_port": addr_info[1],
+                                    "call_id": call_id
+                                })
+                                
+                                self.send_json(self.clients[callee], {
+                                    "type": "INCOMING_CALL",
+                                    "from": user,
+                                    "caller_ip": addr[0]
+                                })
+                            else:
+                                self.send_json(client_socket, {"status": "error", "message": "User offline"})
 
         except Exception as e:
             print(f"Error with {addr}: {e}")
         finally:
             if user and user in self.clients:
                 del self.clients[user]
-                # Notify others that I am OFFLINE
                 self.broadcast_json({
                     "type": "STATUS_UPDATE", 
                     "username": user, 
