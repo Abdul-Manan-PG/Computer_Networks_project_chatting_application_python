@@ -10,7 +10,6 @@ from client_db import ClientDatabase
 app = Flask(__name__)
 app.secret_key = 'secret_key_for_session'
 
-# Ensure upload directory exists
 UPLOAD_FOLDER = 'static/uploads'
 if not os.path.exists(UPLOAD_FOLDER):
     os.makedirs(UPLOAD_FOLDER)
@@ -25,10 +24,11 @@ class ChatBackend:
         self.message_queue = [] 
         
     def reset_state(self):
-        self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.tcp_socket = None
         self.udp_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_socket.bind(('0.0.0.0', UDP_PORT))
         self.my_udp_port = self.udp_socket.getsockname()[1]
+        
         self.connected = False
         self.username = None
         self.friend_statuses = {} 
@@ -38,14 +38,35 @@ class ChatBackend:
         self.call_status = "Idle"
 
     def connect(self, server_ip):
+        # 1. Check if already connected to avoid duplicate sockets
+        if self.connected and self.tcp_socket:
+            try:
+                # Test connection
+                self.tcp_socket.send(b"") 
+                return True
+            except:
+                self.connected = False
+        
+        # 2. Establish new connection
         try:
-            if self.tcp_socket.fileno() == -1: self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            self.tcp_socket.settimeout(10) # Socket timeout
             self.tcp_socket.connect((server_ip, TCP_PORT))
+            self.tcp_socket.settimeout(None) # Remove timeout for listener
+            
             self.connected = True
-            threading.Thread(target=self.listen_tcp, daemon=True).start()
-            threading.Thread(target=self.receive_udp, daemon=True).start()
+            
+            # Start background threads
+            t1 = threading.Thread(target=self.listen_tcp, daemon=True)
+            t2 = threading.Thread(target=self.receive_udp, daemon=True)
+            t1.start()
+            t2.start()
+            
             return True
-        except: return False
+        except Exception as e:
+            print(f"Connection Failed: {e}")
+            self.connected = False
+            return False
     
     def disconnect(self):
         if self.connected:
@@ -57,12 +78,13 @@ class ChatBackend:
         self.reset_state()
 
     def send_command(self, data):
-        if self.connected:
+        if self.connected and self.tcp_socket:
             try:
                 msg = json.dumps(data) + "\n"
-                self.tcp_socket.send(msg.encode('utf-8'))
+                self.tcp_socket.sendall(msg.encode('utf-8'))
                 return True
-            except: 
+            except Exception as e: 
+                print(f"Send Error: {e}")
                 self.connected = False
                 return False
         return False
@@ -71,46 +93,55 @@ class ChatBackend:
         buffer = ""
         while self.connected:
             try:
-                data = self.tcp_socket.recv(1024*1024).decode('utf-8') # Large buffer for files
+                # Big buffer for files
+                data = self.tcp_socket.recv(1024*1024).decode('utf-8')
                 if not data:
+                    print("Server closed connection")
                     self.connected = False
                     break
+                
                 buffer += data
+                
                 while "\n" in buffer:
                     message_str, buffer = buffer.split("\n", 1)
                     if not message_str.strip(): continue
-                    try: self.process_message(json.loads(message_str))
-                    except: pass
-            except: 
+                    
+                    try: 
+                        self.process_message(json.loads(message_str))
+                    except json.JSONDecodeError: 
+                        print("Client JSON Decode Error")
+            except Exception as e: 
+                print(f"Listener Error: {e}")
                 self.connected = False
                 break
 
     def process_message(self, msg):
         msg_type = msg.get('type')
         
+        # Priority: Auth responses don't have a 'type', usually just 'status' and 'message'
+        if 'status' in msg and 'message' in msg and not msg_type:
+             self.message_queue.append(msg)
+             return
+
         if msg_type == 'MESSAGE':
             sender = msg['from']
             content = msg['content']
             m_type = msg.get('msg_type', 'text')
             filename = msg.get('filename', '')
 
-            # If it's a file, decode and save
+            # Save File Logic
             if m_type != 'text':
                 try:
                     file_data = base64.b64decode(content)
                     filepath = os.path.join(UPLOAD_FOLDER, filename)
-                    # Handle duplicate filenames
                     if os.path.exists(filepath):
                         filename = f"{int(time.time())}_{filename}"
                         filepath = os.path.join(UPLOAD_FOLDER, filename)
-                    
                     with open(filepath, 'wb') as f:
                         f.write(file_data)
-                    
-                    # For DB, we store the filename, not the base64 content
                     content = filename 
                 except Exception as e:
-                    print(f"File save error: {e}")
+                    print(f"File Save Error: {e}")
 
             if self.username:
                 self.db.save_message(self.username, sender, sender, content, m_type, msg['timestamp'])
@@ -122,7 +153,6 @@ class ChatBackend:
 
         elif msg.get('status') == 'success' and 'data' in msg:
             data = msg['data']
-            # Friend List
             if isinstance(data, list) and (len(data)==0 or isinstance(data[0], dict)):
                 if self.username:
                     for f in data:
@@ -130,7 +160,6 @@ class ChatBackend:
                         self.friend_statuses[f['username']] = f['status']
                         self.send_command({"command": "GET_HISTORY", "of_user": f['username']})
                 self.message_queue.append(msg)
-            # History
             elif isinstance(data, list) and msg.get('with_user'):
                 self.db.bulk_save_messages(self.username, msg['with_user'], data)
 
@@ -183,25 +212,47 @@ def connect():
     password = request.form.get('password')
     action = request.form.get('action')
 
+    # Try to connect if not already connected
     if not backend.connected:
-        if not backend.connect(server_ip): return "Server connection failed", 400
+        if not backend.connect(server_ip): 
+            return "<h2>Connection Failed</h2><p>Could not reach the server. Is it running?</p><a href='/'>Try Again</a>"
 
-    backend.send_command({"command": "REGISTER" if action == "register" else "LOGIN", "username": username, "password": password, "udp_port": backend.my_udp_port})
+    # Send Auth Command
+    success = backend.send_command({
+        "command": "REGISTER" if action == "register" else "LOGIN", 
+        "username": username, 
+        "password": password, 
+        "udp_port": backend.my_udp_port
+    })
+
+    if not success:
+        return "<h2>Send Failed</h2><p>Connected, but failed to send login command.</p><a href='/'>Try Again</a>"
     
-    for _ in range(20):
+    # Wait for response (Increased Timeout to 5 seconds)
+    # Checks every 0.1s for 50 times
+    for _ in range(50):
         time.sleep(0.1)
+        found_msg = None
         for i, msg in enumerate(backend.message_queue):
             if msg.get('status') in ['success', 'error'] and 'message' in msg:
+                # Verify this isn't a stale message (simple heuristic)
+                found_msg = msg
                 backend.message_queue.pop(i)
-                if msg['status'] == 'success':
-                    if action == 'login':
-                        backend.username = username
-                        session['user'] = username
-                        backend.send_command({"command": "GET_FRIENDS"})
-                        return redirect(url_for('dashboard'))
-                    else: return f"<h2>Registered!</h2><a href='/'>Login</a>"
-                else: return f"<h2>Error</h2><p>{msg['message']}</p>"
-    return "Timeout"
+                break
+        
+        if found_msg:
+            if found_msg['status'] == 'success':
+                if action == 'login':
+                    backend.username = username
+                    session['user'] = username
+                    backend.send_command({"command": "GET_FRIENDS"})
+                    return redirect(url_for('dashboard'))
+                else: 
+                    return f"<h2>Registered!</h2><p>Account created for {username}.</p><a href='/'>Login</a>"
+            else: 
+                return f"<h2>Error</h2><p>{found_msg['message']}</p><a href='/'>Try Again</a>"
+
+    return "<h2>Timeout</h2><p>Server took too long to respond.</p><a href='/'>Try Again</a>"
 
 @app.route('/logout')
 def logout():
@@ -218,7 +269,7 @@ def dashboard():
 def send_message():
     try:
         data = request.json
-        if not backend.connected: return jsonify({"error": "Disconnected"}), 503
+        if not backend.connected: return jsonify({"status": "error", "message": "Disconnected"}), 503
         
         status = backend.friend_statuses.get(data['to'], "Offline")
         if status == "Offline": return jsonify({"status": "error", "message": "User Offline"}), 400
@@ -234,35 +285,30 @@ def upload_file():
     if 'file' not in request.files: return jsonify({"error": "No file"}), 400
     file = request.files['file']
     to_user = request.form['to']
-    msg_type = request.form['type'] # image, audio, video, file
+    msg_type = request.form['type']
     
     if file.filename == '': return jsonify({"error": "No filename"}), 400
     
-    # Check offline status strict check
     status = backend.friend_statuses.get(to_user, "Offline")
     if status == "Offline": return jsonify({"status": "error", "message": "User Offline"}), 400
 
-    # Save locally
     filename = f"{int(time.time())}_{file.filename}"
     filepath = os.path.join(UPLOAD_FOLDER, filename)
     file.save(filepath)
     
-    # Read and Encode
     with open(filepath, "rb") as f:
         encoded_string = base64.b64encode(f.read()).decode('utf-8')
     
-    # Send
     success = backend.send_command({
         "command": "SEND_MSG",
         "to": to_user,
-        "message": encoded_string, # Base64 content
+        "message": encoded_string,
         "msg_type": msg_type,
         "filename": filename
     })
 
     if success:
         t = time.strftime("%H:%M:%S")
-        # Save to DB (Store filename only)
         backend.db.save_message(backend.username, to_user, backend.username, filename, msg_type, t)
         return jsonify({"status": "ok", "timestamp": t, "filename": filename})
     else:
@@ -287,7 +333,6 @@ def get_friends():
 @app.route('/api/history/<friend_name>')
 def get_history(friend_name):
     msgs = backend.db.get_history(backend.username, friend_name)
-    # Format: sender, content, msg_type, timestamp
     formatted = [{"from": m[0], "content": m[1], "msg_type": m[2], "timestamp": m[3]} for m in msgs]
     return jsonify(formatted)
 
@@ -303,4 +348,5 @@ def updates():
     return jsonify({"messages": data, "call_status": backend.call_status, "connected": backend.connected})
 
 if __name__ == '__main__':
+    # Threaded is ESSENTIAL for this to work
     app.run(host='0.0.0.0', port=5000, debug=True, threaded=True)

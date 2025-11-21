@@ -15,7 +15,6 @@
         .message.me { background: #dcf8c6; align-self: flex-end; }
         .message.other { background: white; align-self: flex-start; }
         
-        /* Media Styling */
         .msg-img { max-width: 100%; border-radius: 5px; cursor: pointer; }
         .msg-video { max-width: 100%; border-radius: 5px; }
         .msg-audio { width: 100%; min-width: 250px; }
@@ -25,7 +24,6 @@
         .icon-btn { background: none; border: none; font-size: 1.2rem; color: #7f8c8d; cursor: pointer; padding: 10px; }
         .icon-btn:hover { color: #3498db; }
         .icon-btn.recording { color: red; animation: pulse 1s infinite; }
-        
         @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.2); } 100% { transform: scale(1); } }
 
         .friend-item { padding: 10px; cursor: pointer; border-bottom: 1px solid #34495e; display: flex; justify-content: space-between; align-items: center;}
@@ -38,51 +36,32 @@
     </style>
 </head>
 <body>
-
-    <!-- Sidebar -->
     <div id="sidebar">
         <h3>{{ username }}</h3>
         <div id="connection-warning">Disconnected</div>
         <div id="call-status" style="background: #e67e22; padding: 5px; display:none; text-align:center; font-size:0.8em">In Call</div>
-        
         <div style="margin-top: 20px;">
             <input type="text" id="new-friend-name" placeholder="Add friend..." style="width: 100%; box-sizing: border-box;">
             <button onclick="addFriend()" style="width: 100%; margin-top: 5px; background: #27ae60; border:none; padding:8px; color:white; cursor:pointer;">Add</button>
         </div>
-
         <h4 style="margin-top: 30px;">Friends</h4>
         <button onclick="refreshFriends()" style="background: #7f8c8d; font-size: 0.8em; border:none; padding:5px; color:white; cursor:pointer; width:100%">Refresh List</button>
         <div id="friends-list" style="margin-top: 10px;"></div>
-
         <a href="/logout"><button class="logout-btn">Logout</button></a>
     </div>
 
-    <!-- Main Chat -->
     <div id="main">
         <div style="padding: 15px; background: white; border-bottom: 1px solid #ddd; display:flex; justify-content: space-between; align-items: center;">
             <span id="chat-title">Select a friend</span>
             <button onclick="startCall()" style="background: #e67e22; border:none; padding:8px 15px; color:white; cursor:pointer; border-radius:4px" id="btn-call" disabled>UDP Call</button>
         </div>
-        
         <div id="chat-area"></div>
-
         <div id="input-area">
-            <!-- Hidden File Input -->
             <input type="file" id="file-input" style="display: none;" onchange="handleFileUpload(this)">
-            
-            <button class="icon-btn" onclick="document.getElementById('file-input').click()" id="btn-attach" disabled title="Attach File">
-                <i class="fas fa-paperclip"></i>
-            </button>
-            
+            <button class="icon-btn" onclick="document.getElementById('file-input').click()" id="btn-attach" disabled title="Attach File"><i class="fas fa-paperclip"></i></button>
             <input type="text" id="msg-input" placeholder="Type a message..." disabled>
-            
-            <button class="icon-btn" id="btn-mic" onclick="toggleRecording()" disabled title="Voice Message">
-                <i class="fas fa-microphone"></i>
-            </button>
-            
-            <button class="icon-btn" onclick="sendMessage()" id="btn-send" disabled style="color: #3498db;">
-                <i class="fas fa-paper-plane"></i>
-            </button>
+            <button class="icon-btn" id="btn-mic" onclick="toggleRecording()" disabled title="Voice Message"><i class="fas fa-microphone"></i></button>
+            <button class="icon-btn" onclick="sendMessage()" id="btn-send" disabled style="color: #3498db;"><i class="fas fa-paper-plane"></i></button>
         </div>
     </div>
 
@@ -95,16 +74,13 @@
         window.onload = refreshFriends;
         setInterval(fetchUpdates, 1000);
 
-        // --- Polling for Updates ---
         async function fetchUpdates() {
             try {
                 const res = await fetch('/api/updates');
                 const data = await res.json();
-
                 document.getElementById('connection-warning').style.display = data.connected ? 'none' : 'block';
                 document.getElementById('call-status').style.display = data.call_status !== "Idle" ? 'block' : 'none';
                 document.getElementById('call-status').innerText = data.call_status;
-
                 data.messages.forEach(msg => {
                     if (msg.status === 'success' && Array.isArray(msg.data) && (msg.data.length === 0 || msg.data[0].username)) {
                         renderFriends(msg.data);
@@ -123,18 +99,14 @@
             } catch (e) { console.log(e); }
         }
 
-        // --- Core UI Logic ---
         async function selectFriend(name, status) {
             currentChatUser = name;
             document.getElementById('chat-title').innerText = name;
             status === 'Offline' ? disableChatInput() : enableChatInput();
-
             document.querySelectorAll('.friend-item').forEach(el => el.classList.remove('active'));
             document.querySelectorAll(`[data-name="${name}"]`).forEach(el => el.classList.add('active'));
-
             const area = document.getElementById('chat-area');
             area.innerHTML = 'Loading...';
-            
             const res = await fetch(`/api/history/${name}`);
             const history = await res.json();
             area.innerHTML = '';
@@ -147,107 +119,72 @@
         function appendMessage(sender, content, type, time) {
             const div = document.createElement('div');
             div.className = `message ${sender === 'Me' ? 'me' : 'other'}`;
-            
             let body = "";
             const path = `/static/uploads/${content}`;
-            
-            if (type === 'text') {
-                body = `<span>${content}</span>`;
-            } else if (type === 'image') {
-                body = `<img src="${path}" class="msg-img" onclick="window.open(this.src)">`;
-            } else if (type === 'video') {
-                body = `<video src="${path}" controls class="msg-video"></video>`;
-            } else if (type === 'audio') {
-                body = `<audio src="${path}" controls class="msg-audio"></audio>`;
-            } else {
-                body = `<a href="${path}" download class="msg-file"><i class="fas fa-file"></i> ${content}</a>`;
-            }
-
+            if (type === 'text') body = `<span>${content}</span>`;
+            else if (type === 'image') body = `<img src="${path}" class="msg-img" onclick="window.open(this.src)">`;
+            else if (type === 'video') body = `<video src="${path}" controls class="msg-video"></video>`;
+            else if (type === 'audio') body = `<audio src="${path}" controls class="msg-audio"></audio>`;
+            else body = `<a href="${path}" download class="msg-file"><i class="fas fa-file"></i> ${content}</a>`;
             div.innerHTML = `<strong>${sender}</strong><br>${body}<br><small style="font-size:0.7em; opacity:0.7">${time}</small>`;
             const area = document.getElementById('chat-area');
             area.appendChild(div);
             area.scrollTop = area.scrollHeight;
         }
 
-        // --- File Handling ---
         async function handleFileUpload(input) {
             const file = input.files[0];
             if (!file || !currentChatUser) return;
-
             let type = 'file';
             if (file.type.startsWith('image/')) type = 'image';
             else if (file.type.startsWith('video/')) type = 'video';
             else if (file.type.startsWith('audio/')) type = 'audio';
-
             const formData = new FormData();
             formData.append('file', file);
             formData.append('to', currentChatUser);
             formData.append('type', type);
-
             appendMessage('Me', 'Uploading...', 'text', 'Now');
-
             const res = await fetch('/api/upload', { method: 'POST', body: formData });
             const data = await res.json();
-            
-            // Remove "Uploading..." and show real message
-            const area = document.getElementById('chat-area');
-            area.lastChild.remove(); 
-            
-            if (res.ok) {
-                appendMessage('Me', data.filename, type, data.timestamp);
-            } else {
-                alert(data.message);
-            }
+            document.getElementById('chat-area').lastChild.remove(); 
+            if (res.ok) appendMessage('Me', data.filename, type, data.timestamp);
+            else alert(data.message);
         }
 
-        // --- Voice Recording ---
         async function toggleRecording() {
             const btn = document.getElementById('btn-mic');
-            
             if (!mediaRecorder || mediaRecorder.state === "inactive") {
-                // Start Recording
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                     mediaRecorder = new MediaRecorder(stream);
                     audioChunks = [];
                     mediaRecorder.ondataavailable = event => audioChunks.push(event.data);
-                    
                     mediaRecorder.onstop = async () => {
                         const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
                         const file = new File([audioBlob], "voice_msg.wav", { type: "audio/wav" });
-                        
-                        // Use standard upload flow
                         const dataTransfer = new DataTransfer();
                         dataTransfer.items.add(file);
                         document.getElementById('file-input').files = dataTransfer.files;
                         handleFileUpload(document.getElementById('file-input'));
                     };
-                    
                     mediaRecorder.start();
                     btn.classList.add('recording');
                 } catch (err) { alert("Microphone access denied."); }
             } else {
-                // Stop Recording
                 mediaRecorder.stop();
                 btn.classList.remove('recording');
             }
         }
 
-        // --- Standard Text Sending ---
         async function sendMessage() {
             const txt = document.getElementById('msg-input');
             if (!txt.value || !currentChatUser) return;
-            const res = await fetch('/api/send_message', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ to: currentChatUser, message: txt.value })
-            });
+            const res = await fetch('/api/send_message', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({ to: currentChatUser, message: txt.value }) });
             const data = await res.json();
             if(res.ok) { appendMessage('Me', txt.value, 'text', data.timestamp); txt.value = ''; } 
             else alert(data.message);
         }
 
-        // --- Helpers ---
         function disableChatInput() {
             document.getElementById('msg-input').disabled = true;
             document.getElementById('btn-send').disabled = true;

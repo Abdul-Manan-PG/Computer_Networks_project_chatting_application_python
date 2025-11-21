@@ -10,6 +10,7 @@ TCP_PORT = 5555
 class ChatServer:
     def __init__(self):
         self.server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.server_socket.bind((HOST, TCP_PORT))
         self.server_socket.listen()
         self.db = ChatDatabase()
@@ -17,19 +18,24 @@ class ChatServer:
         print(f"Server started on {HOST}:{TCP_PORT}")
 
     def send_json(self, sock, data):
+        """Safely send JSON with newline delimiter."""
         try:
             msg = json.dumps(data) + "\n"
-            sock.send(msg.encode('utf-8'))
+            sock.sendall(msg.encode('utf-8')) # sendall is safer than send
         except Exception as e:
             print(f"Send error: {e}")
 
     def broadcast_json(self, data, exclude_user=None):
         msg = json.dumps(data) + "\n"
         encoded_msg = msg.encode('utf-8')
-        for user, client_sock in self.clients.items():
+        
+        # Iterate over a copy of items to avoid runtime error if dictionary changes size
+        for user, client_sock in list(self.clients.items()):
             if user != exclude_user:
-                try: client_sock.send(encoded_msg)
-                except: pass
+                try:
+                    client_sock.sendall(encoded_msg)
+                except:
+                    pass
 
     def handle_client(self, client_socket, addr):
         print(f"New connection from {addr}")
@@ -38,15 +44,26 @@ class ChatServer:
         
         try:
             while True:
-                data = client_socket.recv(1024*1024).decode('utf-8') # Increased buffer for files
-                if not data: break
+                # Large buffer for file uploads
+                try:
+                    data = client_socket.recv(1024*1024).decode('utf-8')
+                except UnicodeDecodeError:
+                    continue # Skip bad packets
+                
+                if not data:
+                    break
+                
                 buffer += data
                 
                 while "\n" in buffer:
                     message_str, buffer = buffer.split("\n", 1)
                     if not message_str.strip(): continue
-                    try: request = json.loads(message_str)
-                    except: continue
+                    
+                    try:
+                        request = json.loads(message_str)
+                    except json.JSONDecodeError:
+                        print("Server received malformed JSON")
+                        continue
 
                     command = request.get('command')
                     
@@ -58,14 +75,22 @@ class ChatServer:
                     elif command == 'LOGIN':
                         if self.db.validate_login(request['username'], request['password']):
                             user = request['username']
+                            # Remove old socket if user was somehow stuck
+                            if user in self.clients:
+                                try: self.clients[user].close()
+                                except: pass
+                            
                             self.db.update_user_address(user, addr[0], request.get('udp_port', 0))
                             self.clients[user] = client_socket
+                            
                             self.send_json(client_socket, {"status": "success", "message": f"Welcome {user}!"})
+                            time.sleep(0.1) # Small delay to ensure client processes login before status update
                             self.broadcast_json({"type": "STATUS_UPDATE", "username": user, "status": "Online"}, exclude_user=user)
                         else:
                             self.send_json(client_socket, {"status": "error", "message": "Invalid credentials"})
 
                     elif user:
+                        # Authenticated Commands
                         if command == 'LOGOUT':
                             if user in self.clients: del self.clients[user]
                             self.broadcast_json({"type": "STATUS_UPDATE", "username": user, "status": "Offline"})
@@ -74,20 +99,18 @@ class ChatServer:
 
                         elif command == 'SEND_MSG':
                             recipient = request['to']
-                            msg_content = request['message'] # For text, this is text. For file, this is base64
+                            msg_content = request['message']
                             msg_type = request.get('msg_type', 'text')
                             filename = request.get('filename', '')
 
                             if recipient in self.clients:
-                                # We do NOT save file content to DB to save space, only filename
-                                # If text, save text. If file, save filename + " (File)"
                                 db_content = filename if msg_type != 'text' else msg_content
                                 self.db.save_message(user, recipient, db_content)
                                 
                                 payload = {
                                     "type": "MESSAGE",
                                     "from": user,
-                                    "content": msg_content, # Send full base64 to recipient
+                                    "content": msg_content,
                                     "msg_type": msg_type,
                                     "filename": filename,
                                     "timestamp": time.ctime()
@@ -139,9 +162,12 @@ class ChatServer:
 
     def start(self):
         while True:
-            client, addr = self.server_socket.accept()
-            thread = threading.Thread(target=self.handle_client, args=(client, addr))
-            thread.start()
+            try:
+                client, addr = self.server_socket.accept()
+                thread = threading.Thread(target=self.handle_client, args=(client, addr))
+                thread.start()
+            except Exception as e:
+                print(f"Accept Error: {e}")
 
 if __name__ == "__main__":
     server = ChatServer()
