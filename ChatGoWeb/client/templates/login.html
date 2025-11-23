@@ -1,0 +1,27 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Chat Go - Login</title>
+<style>
+body{font-family:'Segoe UI',sans-serif;background:#f0f2f5;display:flex;justify-content:center;align-items:center;height:100vh;margin:0}
+.box{background:white;padding:40px;border-radius:8px;box-shadow:0 4px 12px rgba(0,0,0,0.1);width:350px;text-align:center}
+h1{color:#0084ff;margin-bottom:20px}
+input{width:100%;padding:12px;margin:8px 0;border:1px solid #ddd;border-radius:6px;box-sizing:border-box}
+button{width:100%;padding:12px;margin:10px 0;border:none;border-radius:6px;font-weight:bold;cursor:pointer;font-size:16px}
+.login{background:#0084ff;color:white}
+.reg{background:#42b72a;color:white}
+</style>
+</head>
+<body>
+<div class="box">
+    <h1>Chat Go</h1>
+    <form action="/connect" method="POST">
+        <input type="text" name="server_ip" value="127.0.0.1" placeholder="Server IP">
+        <input type="text" name="username" placeholder="Username" required>
+        <input type="password" name="password" placeholder="Password" required>
+        <button type="submit" name="action" value="login" class="login">Log In</button>
+        <button type="submit" name="action" value="register" class="reg">Create Account</button>
+    </form>
+</div>
+</body>
+</html>
