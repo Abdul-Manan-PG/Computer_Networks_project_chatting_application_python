@@ -31,10 +31,6 @@ class ChatDatabase:
         self.cursor.execute("UPDATE users SET ip_address=?, udp_port=? WHERE username=?", (ip, udp_port, username))
         self.conn.commit()
 
-    def get_user_address(self, username):
-        self.cursor.execute("SELECT ip_address, udp_port FROM users WHERE username=?", (username,))
-        return self.cursor.fetchone()
-
     def add_friend(self, user, friend):
         try:
             self.cursor.execute("SELECT 1 FROM users WHERE username=?", (friend,))

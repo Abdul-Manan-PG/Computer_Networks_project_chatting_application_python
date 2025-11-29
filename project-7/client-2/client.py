@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox, filedialog, scrolledtext, simpledialog
 import socket, threading, json, time, os, base64
 import cv2, pyaudio, pickle, struct
+import platform, subprocess
 from PIL import Image, ImageTk
 from client_db import ClientDatabase
 
@@ -23,7 +24,10 @@ class ChatGo:
         self.root.geometry("1100x750")
         self.root.configure(bg="#ffffff")
 
+        # TCP Socket for Reliable Data (Login, Messages, Files)
         self.tcp = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        
+        # UDP Socket for Real-Time Data (Voice, Video)
         self.udp = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp.bind(('0.0.0.0', 0))
         self.my_udp_port = self.udp.getsockname()[1]
@@ -82,7 +86,8 @@ class ChatGo:
         buf = ""
         while self.connected:
             try:
-                data = self.tcp.recv(4096).decode('utf-8')
+                # 1MB buffer for files
+                data = self.tcp.recv(1024*1024).decode('utf-8')
                 if not data: break
                 buf += data
                 while "\n" in buf:
@@ -99,7 +104,7 @@ class ChatGo:
                     room = data[1:1+room_len].decode('utf-8')
                     if room != self.call_room: continue
 
-                    type_flag = chr(data[1+room_len]) # 'v' or 'a'
+                    type_flag = chr(data[1+room_len]) 
                     payload = data[1+room_len+1:]
 
                     if type_flag == 'a':
@@ -128,7 +133,6 @@ class ChatGo:
         if 'status' in msg and not t: 
             if msg['status'] == 'success' and "Welcome" in msg.get('message',''):
                 self.dashboard_ui()
-                # Delay fetching slightly to ensure UI is ready
                 self.root.after(100, lambda: self.send({"command": "GET_FRIENDS"}))
                 self.root.after(200, lambda: self.send({"command": "GET_GROUPS"}))
             elif msg['status'] == 'error': messagebox.showerror("Error", msg['message'])
@@ -141,9 +145,34 @@ class ChatGo:
         elif t == 'MESSAGE':
             ctx = msg.get('group') if msg.get('group') else msg['from']
             is_g = True if msg.get('group') else False
-            self.db.save_msg(ctx, msg['from'], msg['content'], msg['is_file'], msg['time'], is_g)
+            
+            content = msg['content']
+            is_file = msg.get('is_file', False)
+            filename = msg.get('filename', '')
+
+            # --- FILE HANDLING START ---
+            if is_file:
+                try:
+                    file_data = base64.b64decode(content)
+                    filepath = os.path.join("downloads", filename)
+                    
+                    # Handle duplicate filenames
+                    if os.path.exists(filepath):
+                        name, ext = os.path.splitext(filename)
+                        filename = f"{name}_{int(time.time())}{ext}"
+                        filepath = os.path.join("downloads", filename)
+                        
+                    with open(filepath, "wb") as f:
+                        f.write(file_data)
+                    content = filename # Store only filename in history
+                except Exception as e:
+                    print(f"Error saving file: {e}")
+                    content = "[File Error]"
+            # --- FILE HANDLING END ---
+
+            self.db.save_msg(ctx, msg['from'], content, is_file, msg['time'], is_g)
             if self.current_chat == ctx:
-                self.render_msg(msg['from'], msg['content'], msg['is_file'], msg['time'])
+                self.render_msg(msg['from'], content, is_file, msg['time'])
 
         elif t == 'INCOMING_CALL':
             res = messagebox.askyesno("Incoming Call", f"{msg['from']} is calling you in {msg.get('group_name', 'Private')}...")
@@ -187,80 +216,62 @@ class ChatGo:
 
     def dashboard_ui(self):
         self.clear()
-        # Sidebar
         self.sidebar = ttk.Frame(self.root, style="Sidebar.TFrame", width=280)
         self.sidebar.pack(side=tk.LEFT, fill=tk.Y)
         self.sidebar.pack_propagate(False)
         
-        # Header
         h = tk.Frame(self.sidebar, bg="#f0f2f5", height=80)
         h.pack(fill=tk.X)
         ttk.Label(h, text="Chat Go", style="Header.TLabel").pack(side=tk.LEFT, padx=20, pady=20)
-        
-        # Refresh Button (FIXED)
         tk.Button(h, text="⟳", command=self.refresh_data, bd=0, bg="#f0f2f5", fg="#0084ff", font=("Segoe UI", 16, "bold")).pack(side=tk.RIGHT, padx=15)
         
-        # Action Buttons
         act_fr = tk.Frame(self.sidebar, bg="#f0f2f5")
         act_fr.pack(fill=tk.X, padx=10)
-        
         b_grp = tk.Button(act_fr, text="+ Group", command=self.create_group, bg="white", bd=0, fg="#0084ff", font=("Segoe UI", 10, "bold"))
         b_grp.pack(side=tk.RIGHT, padx=5, ipadx=5, ipady=2)
         b_frd = tk.Button(act_fr, text="+ Friend", command=self.add_friend, bg="white", bd=0, fg="#0084ff", font=("Segoe UI", 10, "bold"))
         b_frd.pack(side=tk.RIGHT, padx=5, ipadx=5, ipady=2)
 
-        # Lists Container (FIXED: Re-initializing structure)
         self.list_frame = tk.Frame(self.sidebar, bg="#f0f2f5")
         self.list_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        # Create fixed labels and containers for Groups/Friends to avoid 'missing widget' errors
         tk.Label(self.list_frame, text="GROUPS", bg="#f0f2f5", fg="gray", font=("Segoe UI", 9, "bold"), anchor="w").pack(fill=tk.X, padx=15, pady=(5,2))
         self.gr_list_w = tk.Frame(self.list_frame, bg="#f0f2f5")
         self.gr_list_w.pack(fill=tk.X)
-        
         tk.Label(self.list_frame, text="FRIENDS", bg="#f0f2f5", fg="gray", font=("Segoe UI", 9, "bold"), anchor="w").pack(fill=tk.X, padx=15, pady=(10,2))
         self.fr_list_w = tk.Frame(self.list_frame, bg="#f0f2f5")
         self.fr_list_w.pack(fill=tk.X)
 
         tk.Button(self.sidebar, text="Logout", bg="#ff4d4d", fg="white", bd=0, font=("Segoe UI", 10, "bold"), command=self.logout).pack(fill=tk.X, side=tk.BOTTOM)
 
-        # Main Chat Area
         self.main = tk.Frame(self.root, bg="white")
         self.main.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True)
         
-        # Top Bar
         self.head_fr = tk.Frame(self.main, bg="white", height=60, bd=1, relief="solid")
         self.head_fr.pack(fill=tk.X)
         self.head_lbl = tk.Label(self.head_fr, text="", font=("Segoe UI", 14, "bold"), bg="white", padx=20)
         self.head_lbl.pack(side=tk.LEFT, pady=15)
         
-        # Chat Actions
         self.act_box = tk.Frame(self.head_fr, bg="white")
         self.act_box.pack(side=tk.RIGHT, padx=20)
-        
         self.b_add = tk.Button(self.act_box, text="Add Member", command=self.add_member, bd=0, bg="#f0f2f5")
         self.b_call = tk.Button(self.act_box, text="📞", command=lambda: self.init_call('audio'), bd=0, bg="white", font=("Segoe UI", 14))
         self.b_vid = tk.Button(self.act_box, text="🎥", command=lambda: self.init_call('video'), bd=0, bg="white", font=("Segoe UI", 14))
 
-        # Messages Area
         self.txt_area = scrolledtext.ScrolledText(self.main, bg="white", font=("Segoe UI", 11), bd=0, state='disabled', padx=20, pady=20)
         self.txt_area.pack(fill=tk.BOTH, expand=True)
-        
         self.txt_area.tag_config("me", justify='right', background="#0084ff", foreground="white", lmargin1=200, rmargin=10, spacing1=5, spacing3=5)
         self.txt_area.tag_config("other", justify='left', background="#e4e6eb", foreground="black", rmargin=200, lmargin1=10, spacing1=5, spacing3=5)
         self.txt_area.tag_config("meta", font=("Segoe UI", 8), foreground="#65676b")
         self.txt_area.tag_config("name", font=("Segoe UI", 9, "bold"), foreground="#65676b")
 
-        # Input
         inp_fr = tk.Frame(self.main, bg="white", height=60)
         inp_fr.pack(fill=tk.X, padx=20, pady=10)
         
         tk.Button(inp_fr, text="📎", command=self.send_file, bd=0, bg="white", font=("Segoe UI", 16)).pack(side=tk.LEFT)
-        
         self.e_msg = tk.Entry(inp_fr, font=("Segoe UI", 11), bd=0, bg="#f0f2f5", width=50)
         self.e_msg.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=10, ipady=8)
         self.e_msg.bind("<Return>", lambda e: self.send_msg())
-        
         tk.Button(inp_fr, text="➤", command=self.send_msg, bd=0, bg="white", fg="#0084ff", font=("Segoe UI", 16)).pack(side=tk.RIGHT)
 
     def refresh_data(self):
@@ -268,43 +279,35 @@ class ChatGo:
         self.send({"command": "GET_GROUPS"})
 
     def update_sidebar(self, data, type_):
-        # Safely check if widget exists, otherwise rebuild dashboard or return
-        if not hasattr(self, 'fr_list_w') or not self.fr_list_w.winfo_exists():
-            return
-
+        if not hasattr(self, 'fr_list_w') or not self.fr_list_w.winfo_exists(): return
         target = self.fr_list_w if type_ == 'FRIENDS' else self.gr_list_w
         for w in target.winfo_children(): w.destroy()
-
         for item in data:
             name = item['name'] if type_ == 'FRIENDS' else item
             status = item.get('status', '') if type_ == 'FRIENDS' else ''
             color = "#31a24c" if status == 'Online' else "#bcc0c4"
-            
             f = tk.Frame(target, bg="#f0f2f5", cursor="hand2")
             f.pack(fill=tk.X, pady=1, padx=10)
-            
-            # Icon
             tk.Label(f, text="#" if type_ == 'GROUPS' else "●", fg="black" if type_=='GROUPS' else color, bg="#f0f2f5", font=("Segoe UI", 12)).pack(side=tk.LEFT)
             tk.Label(f, text=name, bg="#f0f2f5", font=("Segoe UI", 11)).pack(side=tk.LEFT, padx=10)
-            
             f.bind("<Button-1>", lambda e, n=name, g=(type_=='GROUPS'): self.open_chat(n, g))
-            for child in f.winfo_children():
-                child.bind("<Button-1>", lambda e, n=name, g=(type_=='GROUPS'): self.open_chat(n, g))
+            for child in f.winfo_children(): child.bind("<Button-1>", lambda e, n=name, g=(type_=='GROUPS'): self.open_chat(n, g))
 
     def open_chat(self, name, is_group):
         self.current_chat = name
         self.is_group = is_group
         self.head_lbl.config(text=name)
-        
-        if is_group: self.b_add.pack(side=tk.LEFT, padx=5)
-        else: self.b_add.pack_forget()
-        self.b_call.pack(side=tk.LEFT, padx=5)
-        self.b_vid.pack(side=tk.LEFT, padx=5)
-
+        if is_group: 
+            self.b_add.pack(side=tk.LEFT, padx=5)
+            self.b_call.pack_forget()
+            self.b_vid.pack_forget()
+        else: 
+            self.b_add.pack_forget()
+            self.b_call.pack(side=tk.LEFT, padx=5)
+            self.b_vid.pack(side=tk.LEFT, padx=5)
         self.txt_area.config(state='normal')
         self.txt_area.delete(1.0, tk.END)
         self.txt_area.config(state='disabled')
-        
         hist = self.db.get_history(name)
         for sender, content, is_file, t in hist:
             self.render_msg(sender, content, is_file, t)
@@ -316,20 +319,48 @@ class ChatGo:
         if self.is_group and tag == "other":
             self.txt_area.insert(tk.END, f"\n{sender}", "name")
         
-        msg_text = f" 📄 {content} " if is_file else f" {content} "
-        self.txt_area.insert(tk.END, f"\n{msg_text}\n", tag)
-        self.txt_area.insert(tk.END, f"{time}\n", "meta")
+        if is_file:
+            msg_text = f" 📄 {content} (Click to Open) "
+            self.txt_area.insert(tk.END, f"\n{msg_text}\n", (tag, "file"))
+            # Configure tag for clickable files
+            self.txt_area.tag_config("file", foreground="#0056b3", underline=1)
+            self.txt_area.tag_bind("file", "<Button-1>", self.open_file_click)
+        else:
+            self.txt_area.insert(tk.END, f"\n {content} \n", tag)
             
+        self.txt_area.insert(tk.END, f"{time}\n", "meta")
         self.txt_area.see(tk.END)
         self.txt_area.config(state='disabled')
+
+    def open_file_click(self, event):
+        try:
+            index = self.txt_area.index(f"@{event.x},{event.y}")
+            line = self.txt_area.get(f"{index} linestart", f"{index} lineend")
+            
+            if "📄" in line and "(Click to Open)" in line:
+                start = line.find("📄") + 2
+                end = line.find("(Click to Open)")
+                filename = line[start:end].strip()
+                
+                filepath = os.path.abspath(os.path.join("downloads", filename))
+                
+                if os.path.exists(filepath):
+                    if platform.system() == 'Darwin':       # macOS
+                        subprocess.call(('open', filepath))
+                    elif platform.system() == 'Windows':    # Windows
+                        os.startfile(filepath)
+                    else:                                   # Linux
+                        subprocess.call(('xdg-open', filepath))
+                else:
+                    messagebox.showerror("Error", f"File not found at {filepath}")
+        except Exception as e:
+            print(f"Error opening file: {e}")
 
     def send_msg(self):
         txt = self.e_msg.get()
         if not txt or not self.current_chat: return
-        
         cmd = "SEND_GROUP_MSG" if self.is_group else "SEND_MSG"
         self.send({"command": cmd, "to": self.current_chat, "msg": txt})
-        
         self.db.save_msg(self.current_chat, self.username, txt, False, time.ctime(), self.is_group)
         self.render_msg(self.username, txt, False, time.ctime())
         self.e_msg.delete(0, tk.END)
@@ -344,6 +375,14 @@ class ChatGo:
         cmd = "SEND_GROUP_MSG" if self.is_group else "SEND_MSG"
         self.send({"command": cmd, "to": self.current_chat, "msg": enc, "is_file": True, "filename": fname})
         
+        # Save local copy to downloads
+        dest_path = os.path.join("downloads", fname)
+        if os.path.abspath(path) != os.path.abspath(dest_path):
+            try:
+                with open(path, "rb") as src, open(dest_path, "wb") as dst:
+                    dst.write(src.read())
+            except: pass
+
         self.db.save_msg(self.current_chat, self.username, fname, True, time.ctime(), self.is_group)
         self.render_msg(self.username, fname, True, time.ctime())
 
@@ -355,24 +394,18 @@ class ChatGo:
     def start_call_ui(self, room, type_):
         self.in_call = True
         self.call_room = room
-        
         self.win_call = tk.Toplevel(self.root)
         self.win_call.title(f"{type_.upper()} Call")
         self.win_call.geometry("600x500")
         self.win_call.configure(bg="black")
-        
         self.remote_video_lbl = tk.Label(self.win_call, text="Connecting...", bg="black", fg="white")
         self.remote_video_lbl.pack(fill=tk.BOTH, expand=True)
-        
         tk.Button(self.win_call, text="End Call", bg="red", fg="white", command=self.end_call_action).pack(pady=10)
-
         self.audio_stream = self.p.open(format=FORMAT, channels=CHANNELS, rate=RATE, input=True, frames_per_buffer=CHUNK)
         self.audio_out = self.p.open(format=FORMAT, channels=CHANNELS, rate=RATE, output=True)
-        
         if type_ == 'video':
             self.cap = cv2.VideoCapture(0)
             threading.Thread(target=self.video_stream_out, daemon=True).start()
-        
         threading.Thread(target=self.audio_stream_out, daemon=True).start()
 
     def video_stream_out(self):
@@ -382,7 +415,6 @@ class ChatGo:
                 frame = cv2.resize(frame, (320, 240))
                 _, buffer = cv2.imencode('.jpg', frame, [int(cv2.IMWRITE_JPEG_QUALITY), 50])
                 data = pickle.dumps(buffer)
-                
                 room_b = self.call_room.encode('utf-8')
                 header = bytes([len(room_b)]) + room_b + b'v'
                 try: self.udp.sendto(header + data, (SERVER_IP, UDP_PORT))
@@ -409,7 +441,6 @@ class ChatGo:
         if self.audio_stream: self.audio_stream.stop_stream(); self.audio_stream.close()
         if self.audio_out: self.audio_out.stop_stream(); self.audio_out.close()
 
-    # --- Helpers ---
     def add_friend(self):
         n = simpledialog.askstring("Add Friend", "Username:")
         if n: self.send({"command": "ADD_FRIEND", "friend": n})
